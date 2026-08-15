@@ -11,7 +11,9 @@ Returns PASS/FAIL with per-gate detail. Reject the candidate on ANY fail.
 Self-contained: aiohttp only, no Gateway/client dependency.
 """
 
+import asyncio
 import logging
+import os
 import aiohttp
 from pydantic import BaseModel, Field
 from telegram.ext import ContextTypes
@@ -21,6 +23,8 @@ logger = logging.getLogger(__name__)
 CATEGORY = "Analysis"
 
 PUBLIC_RPC = "https://api.mainnet-beta.solana.com"
+# Resolution order for the RPC endpoint: config.rpc_url > SOLANA_RPC_URL env > public.
+ENV_RPC_VARS = ("SOLANA_RPC_URL", "RPC_URL")
 
 
 class Config(BaseModel):
@@ -35,20 +39,39 @@ class Config(BaseModel):
 
 async def _rpc(session: aiohttp.ClientSession, url: str, method: str, params: list) -> dict:
     payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
-    async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=25)) as resp:
-        if resp.status != 200:
-            raise RuntimeError(f"{method} -> HTTP {resp.status}")
-        data = await resp.json()
-    if "error" in data:
-        raise RuntimeError(f"{method} -> {data['error']}")
-    return data.get("result")
+    last_err = None
+    for attempt in range(3):
+        try:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=25)) as resp:
+                if resp.status == 429:
+                    last_err = RuntimeError(f"{method} -> HTTP 429 (rate limited)")
+                    await asyncio.sleep(3 * (attempt + 1))
+                    continue
+                if resp.status != 200:
+                    raise RuntimeError(f"{method} -> HTTP {resp.status}")
+                data = await resp.json()
+            if "error" in data:
+                raise RuntimeError(f"{method} -> {data['error']}")
+            return data.get("result")
+        except aiohttp.ClientError as e:
+            last_err = RuntimeError(f"{method} -> {e}")
+            await asyncio.sleep(2 * (attempt + 1))
+    raise last_err or RuntimeError(f"{method} -> failed")
 
 
 async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
     mint = config.base_mint.strip()
     if not mint:
         return "token_safety_check: base_mint is required."
-    url = config.rpc_url.strip() or PUBLIC_RPC
+    url = config.rpc_url.strip()
+    if not url:
+        for var in ENV_RPC_VARS:
+            url = os.environ.get(var, "").strip()
+            if url:
+                break
+    used = "config" if config.rpc_url.strip() else ("env" if url else "public")
+    if not url:
+        url = PUBLIC_RPC
 
     gates: list[tuple[str, bool, str]] = []  # (gate, passed, detail)
     try:
@@ -83,7 +106,7 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
 
     passed = all(ok for _, ok, _ in gates)
     verdict = "PASS" if passed else "FAIL"
-    lines = [f"token_safety_check: **{verdict}** for {mint}"]
+    lines = [f"token_safety_check: **{verdict}** for {mint} (rpc: {used})"]
     for gate, ok, detail in gates:
         lines.append(f"- {'✓' if ok else '✗'} {gate}: {detail}")
     if not passed:
