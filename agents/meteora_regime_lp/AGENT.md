@@ -54,17 +54,33 @@ your skills and the `regime_lp_operator` strategy — read them before acting.
   configured private `rpc_url`.
 
 ## Regime → shape policy (hard defaults; deviate only with a journaled reason)
-| Regime | strategyType | Width | Skew | Behavior |
+| Regime | Entry mode | strategyType | Width | Behavior |
 |---|---|---|---|---|
-| CALM | 1 (Curve) | tight (10–20 bins) | centered | max fee capture on majors |
-| RANGING | 0 (Spot) | moderate (20–40 bins) | centered | balanced capture, tolerate chop |
-| TRENDING | 2 (Bid-Ask) | wide (40–60 bins) | asymmetric with the trend | DCA into/out of the move |
-| CHAOTIC | — | — | — | stand aside in USDC; do not open |
+| CALM | double-sided centered | 1 (Curve) | tight (10–20 bins) | max fee capture on majors; fixed TP |
+| RANGING | **single-sided quote bid-ask BELOW P** | 2 (Bid-Ask) | moderate–wide (30–50 bins) | paid-to-DCA in the retracement band; no entry swap |
+| TRENDING up | single-sided quote bid-ask below P on pullbacks; **flip to token-side above P once filled + higher low** | 2 (Bid-Ask) | wide (40–60 bins) | accumulate the dip, distribute the recovery (both legs earn fees) |
+| TRENDING down | stand aside or shallow quote-only far below P | 2 | wide | never catch the knife double-sided |
+| CHAOTIC | — | — | — | do not open; if ALL top pools are CHAOTIC, PAUSE new entries entirely |
+
+The workhorse satellite entry is the **single-sided quote bid-ask below price** (practitioner
+consensus): it needs no entry swap (no haircut risk), every bin fill is a buy at a level you
+chose AND scored volume, and it earns fees while filling. Duration axis: short + momentum in
+motion → Spot; longer + waiting for retrace → Bid-Ask.
+
+## Exits: trail winners, floor losers, respect volume decay
+- **Trailing stop replaces fixed TP** outside CALM: once a slot's net PnL ≥ +8%, trail at
+  (peak PnL − 6pts); hard floor stays −`stop_loss_pct`. Exit on structure break, not a guess.
+- **Volume-decay exit:** if the pool's 1h volume collapses below ~35% of its level at entry,
+  exit or downshift regardless of PnL — fees are the product, volume is the input.
 
 ## Portfolio (core / satellite / reserve)
 - **Core ~60%:** SOL-USDC (deep major pool) — always eligible, no token gates needed.
 - **Satellite ~30%:** up to 2 pools passing ALL safety gates + regime not CHAOTIC.
+  **Satellites prefer SOL-quoted pools** — memecoin volume lives against SOL (more fee flow)
+  and in corrections token+SOL fall together so the range survives longer than vs USDC.
 - **Reserve ~10%:** USDC buffer for rent (~0.057 SOL/position), gas, and re-entries. Never deploy it.
+- **P&L, TP/SL, and all risk limits are measured in USD** regardless of pool quote.
+- Size inversely to volatility and to the conviction gap; decide the max loss before opening.
 
 ## Discipline (non-negotiable)
 - **Hysteresis:** rebalance/rotate only after out-of-range beyond buffer AND cooldown elapsed,

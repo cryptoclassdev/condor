@@ -18,7 +18,11 @@ default_config:
     max_pct_per_pool: 15
   reserve_pct: 10
   take_profit_pct: 12
+  trailing_arm_pct: 8
+  trailing_gap_pct: 6
+  volume_decay_exit_ratio: 0.35
   stop_loss_pct: 8
+  satellite_quote_asset: SOL
   out_of_range_buffer_pct: 0.5
   out_of_range_max_sec: 1800
   rebalance_cooldown_sec: 900
@@ -75,13 +79,26 @@ when sizing an entry or verifying a close.
 - If rebalances this hour ≥ `max_rebalances_per_hour` → monitoring only this tick.
 
 ### 3. Monitor + exit open slots (hysteresis, not twitchiness)
-Per RUNNING slot read `net_pnl_pct`, `state`, `out_of_range_seconds`. Exit
+Per RUNNING slot read `net_pnl_pct`, `state`, `out_of_range_seconds`. Track each slot's
+**peak net_pnl_pct** and its **pool 1h volume at entry** in your journal. Exit
 (`manage_executors(action="stop", executor_id=…, keep_position=false)`) if ANY:
-- `net_pnl_pct ≥ take_profit_pct` or ≤ −`stop_loss_pct`;
+- **Trailing stop** (RANGING/TRENDING slots): peak PnL reached ≥ `trailing_arm_pct` and
+  current PnL ≤ peak − `trailing_gap_pct`. (CALM slots use fixed `take_profit_pct` instead —
+  a calm major won't 5x, take the fee income.)
+- `net_pnl_pct ≤ −stop_loss_pct` (hard floor, all slots);
+- **Volume decay**: pool 1h volume < `volume_decay_exit_ratio` × its at-entry level — fees
+  are the product, volume is the input; exit even at flat PnL;
 - OUT_OF_RANGE for ≥ `out_of_range_max_sec` AND price beyond the range edge by more than
   `out_of_range_buffer_pct`% AND `rebalance_cooldown_sec` has elapsed since this slot's last
   action — UNLESS one OHLCV check shows price decisively trending back in;
 - regime for that pool flipped to CHAOTIC (satellites only — core rides it out unless SL hits).
+
+**Flip check (satellite bid-ask slots below price):** if the position has substantially
+FILLED with the token (price traded down into the range) AND `regime_engine` now shows
+trend_dir=up with a higher low forming (band_pos rising, sell volume drying), close the slot
+and reopen **single-sided token-side ABOVE P** (`side=2`, Bid-Ask) to distribute into the
+recovery — the second fee leg. Journal it as `flip`. Never flip while the dump is still in
+motion; the reflow must already be underway.
 
 **After every stop: verify the swap-back leg.** Read wallet balances; if base tokens remain,
 sell the whole balance by mint via an order_executor MARKET sell (pace sells ~2s with an API
@@ -90,9 +107,13 @@ Journal every exit with reason + realized PnL + fees + duration, as a `learning`
 
 ### 4. Rank + classify (only if a bucket is below target)
 - `manage_routines(action="run", name="meteora_pool_scanner",
-  strategy_id="meteora_regime_lp.regime_lp_operator", config={"quote_asset":"USDC",
-  "ranking_window": <window>, "top_n": 5, "min_tvl_usd": <entry.min_tvl_usd>,
-  "exclude_pools":[held], "exclude_mints":[held]})`
+  strategy_id="meteora_regime_lp.regime_lp_operator", config={"quote_asset":
+  <satellite_quote_asset for satellites; "USDC" for core>, "ranking_window": <window>,
+  "top_n": 5, "min_tvl_usd": <entry.min_tvl_usd>, "exclude_pools":[held],
+  "exclude_mints":[held]})` — satellites scan **SOL-quoted** pools (that's where memecoin
+  volume and fee flow live; ranges survive corrections longer), core stays SOL-USDC.
+- **PAUSE rule:** if the scanner returns nothing gated, or `regime_engine` classifies ALL top
+  candidates CHAOTIC → no entries this tick (dead/berserk market); journal "paused" and hold.
 - `manage_routines(action="run", name="regime_engine", config={"pool_addresses":
   [<core pool + top candidates>]})` → per pool: regime + suggested shape/width/skew.
 
@@ -109,10 +130,14 @@ remaining satellite budget). Never touch the `reserve_pct`% USDC buffer; keep
 `min_wallet_sol_reserve` SOL for rent (~0.057/position) + fees — if short, journal and hold.
 
 Shape by regime (from `regime_engine`; full details in the `regime_playbook` skill):
-- CALM → `extra_params={"strategyType":1}` (Curve), 10–20 bins, centered.
-- RANGING → `strategyType:0` (Spot), 20–40 bins, centered.
-- TRENDING → `strategyType:2` (Bid-Ask), 40–60 bins, skewed so the token side sits in the
-  direction of the trend; consider single-sided entry on a pullback.
+- CALM (core/majors) → double-sided `side=3`, `extra_params={"strategyType":1}` (Curve),
+  10–20 bins, centered. The only mode that needs an entry swap (haircut ×0.995!).
+- RANGING (satellite default) → **single-sided quote bid-ask below P**: `side=1`,
+  `strategyType:2`, 30–50 bins placed from just under P down toward the recent band low
+  (the retracement zone). NO entry swap — the market fills you and pays fees for it.
+- TRENDING up → same single-sided quote bid-ask, entered on a pullback; plan the flip
+  (step 3) for the distribution leg. Never chase the candle with a double-sided open.
+- TRENDING down → skip, or shallow quote-only far below P at reduced size.
 - CHAOTIC → do not open.
 
 Mechanics, in order:

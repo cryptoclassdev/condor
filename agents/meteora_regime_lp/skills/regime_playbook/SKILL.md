@@ -16,27 +16,38 @@ Inputs: pool (from `meteora_pool_scanner`: pool_address, MintPair, BaseMint, bin
 MaxWidth%, price), regime row (from `regime_engine`), capital for this slot (USDC).
 
 ## 1. Shape by regime
-| Regime | `extra_params.strategyType` | Total width target | Placement |
-|---|---|---|---|
-| CALM | `1` (Curve — liquidity concentrated at center) | 10–20 bins | centered on P |
-| RANGING | `0` (Spot — uniform) | 20–40 bins | centered on P |
-| TRENDING | `2` (Bid-Ask — liquidity at edges) | 40–60 bins | skewed: ~70% of width on the side the trend is moving TOWARD |
-| CHAOTIC | do not open | — | — |
+| Regime | Entry | `strategyType` | Total width | Placement |
+|---|---|---|---|---|
+| CALM (majors) | double-sided `side=3` | `1` (Curve) | 10–20 bins | centered on P |
+| RANGING | **single-sided quote `side=1`** | `2` (Bid-Ask) | 30–50 bins | from just under P down to the recent band low (retracement zone) |
+| TRENDING up | single-sided quote `side=1` on a pullback; later FLIP | `2` | 40–60 bins | below P; after fill + higher low → reopen `side=2` token-side ABOVE P |
+| TRENDING down | skip, or quote-only far below P, reduced size | `2` | wide | deep retracement zone only |
+| CHAOTIC | do not open | — | — | — |
+
+**Why bid-ask below price is the satellite default:** no entry swap (no ×0.995 haircut risk),
+every bin fill is a buy at a pre-chosen level AND counts as volume, fees accrue while
+filling, and single-sided quote can't be caught 50/50 in a falling knife. Spot (`0`) is only
+for short-duration (<4h) positions with bullish momentum already in motion.
+
+**Flip discipline (the second fee leg):** flip only when the reflow is in motion — higher low
+on the hourly, sell volume drying, band_pos rising. Too early = you exit into continuation;
+too late = price runs past your new range. You don't need the bottom, just the turn.
 
 Width in bins → price bounds: `upper/lower = P × (1 ± half_width)` where the TOTAL width
 satisfies `bins = ln(Pu/Pl) / ln(1 + bin_step/10000)`. **Hard clamp: bins < 69** — compute
 before every open, shrink until it fits (the scanner's MaxWidth% is the ceiling for this
 pool). Bounds MUST bracket the live price from `get_pool_info`: `lower < P < upper`.
 
-## 2. Sizing & side (USDC-quoted pools)
-Default double-sided `side=3`, 50/50 unless TRENDING:
-- TRENDING up: hold more base (memecoin/SOL) — base_pct ≈ 60–70, range skewed up.
-- TRENDING down: hold more USDC — base_pct ≈ 30–40, range skewed down. Single-sided
-  (`side=1`, quote-only, range below P) is allowed on a pullback entry.
-- `quote_amount = capital × (1 − base_pct/100)`; acquire base worth `capital × base_pct/100`
-  via order_executor MARKET swap on the **MintPair**.
-- **Haircut the reported fill ×0.995** before `base_amount` (or read the true wallet balance).
-- Always `keep_position=false`; PnL/TP/SL measured in USDC.
+## 2. Sizing & side
+- Satellites (SOL-quoted pools): default `side=1` quote-only bid-ask below P —
+  `quote_amount = capital`, `base_amount = 0`, **no swap needed**. On a flip:
+  `side=2` token-side above P with the base amount actually held in the wallet.
+- Core (SOL-USDC, CALM): double-sided `side=3` ~50/50. This needs an entry swap —
+  **haircut the reported fill ×0.995** before `base_amount` (or read the true wallet balance).
+- Size inversely to volatility and to conviction: full satellite allocation only for gated
+  pools in a clean regime; anything exploratory gets half.
+- Always `keep_position=false`. **PnL/TP/SL and risk limits are measured in USD** even for
+  SOL-quoted pools (scoring is USD): convert with the live SOL price from `get_market_data`.
 
 ## 3. Hysteresis (anti-churn) — check before ANY rebalance/rotation
 1. Price out of range beyond `out_of_range_buffer_pct` (not just touching the edge)?
