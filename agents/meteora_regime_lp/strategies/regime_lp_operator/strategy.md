@@ -161,6 +161,18 @@ satellites / reserve, PnL), any exit (reason), any open (pool, regime, shape, ra
 three-outcome line), rebalances-this-hour count. Write like a trading desk note a human wants
 to read.
 
+## Dry-run mode (execution_mode=dry_run)
+NEVER call `manage_executors(action="create")` or `action="stop"`, and never execute swaps —
+not even expecting the permission layer to block you. Journal the full would-open/would-exit
+(pool, regime, side, range, bins, size, three-outcome test) with conditional language
+("would open …") instead. All analysis routines are allowed.
+
+## Single-sided range placement (side matters on-chain)
+- `side=1` (quote-only bid-ask): the ENTIRE range sits AT/BELOW the live price — `upper ≤ P`,
+  never straddling it. A straddling quote-only open can fail on-chain.
+- `side=2` (token-only, flip leg): the entire range sits AT/ABOVE `P` — `lower ≥ P`.
+- Only `side=3` (double-sided, core CALM mode) brackets `P` (`lower < P < upper`).
+
 ## Guardrails
 - One open per tick; one distinct token per satellite; never re-enter a stopped pool this
   session unless it clearly re-ranks on top.
