@@ -170,6 +170,14 @@ Mechanics, in order:
 4. **Journal the three-outcome test** before the create call: what do we hold if price exits
    above / stays in / exits below — one plain-English line each.
 
+**VERIFY EVERY OPEN — a create call's success response is NOT proof a position exists.**
+Observed twice: the create returns success but the on-chain open silently fails
+(close_type=FAILED, 0 fill, no position). After EVERY create, confirm via
+`manage_executors(action="search", status="RUNNING")` that the new executor is actually
+RUNNING before treating the slot as filled; if it isn't, journal the false-success and
+rebuild the position same tick (or next tick at the latest). Never let the strategy believe
+it has coverage it doesn't.
+
 If the open FAILS simulation → re-check price bracketing + bin count, narrow once, retry once;
 if a swap landed but the open failed, repair (retry with true balance or swap back) — never
 leave acquired base tokens unmanaged.
