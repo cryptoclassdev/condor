@@ -63,6 +63,14 @@ call, at most one `token_safety_check`. Open at most ONE position per tick.
 `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`). Use **mints, not symbols** in every
 `trading_pair` (scanner returns `MintPair`/`BaseMint`).
 
+**MANDATORY on EVERY `manage_executors(action="create", …)` — swaps AND LP opens:**
+`executor_config` MUST include `"controller_id": "<this session's agent_id>"` (exactly the
+agent/session id shown in your [CONTROLLER MODE]/session context, e.g.
+`meteora_regime_lp.regime_lp_operator_eN`). The risk engine CANCELS any create without it
+(or with a mistyped value) because the position would be unattributable to this session —
+this surfaces as "Tool use aborted". It is not a permission problem; include the tag and
+the create auto-approves within risk limits.
+
 ## Each tick
 
 ### 1. Load state — ADOPT every live slot (critical after a restart)
