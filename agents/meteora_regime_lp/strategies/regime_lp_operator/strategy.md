@@ -101,6 +101,17 @@ Per RUNNING slot read `net_pnl_pct`, `state`, `out_of_range_seconds`. Track each
   action — UNLESS one OHLCV check shows price decisively trending back in;
 - regime for that pool flipped to CHAOTIC (satellites only — core rides it out unless SL hits).
 
+**Fast re-chase (UNFILLED quote-only slots that price rose away from):** the hysteresis
+gates above protect positions holding inventory (closing realizes IL). A `side=1` quote-only
+position that price moved UP and away from holds NO inventory — it earns nothing, risks
+nothing, and repositioning costs only tx fees + a refundable rent round-trip. For such a slot
+(position still ~100% quote, zero/negligible base filled), use a faster rule: if price has
+been above the range's upper bound for ≥ 2 consecutive ticks (~10 min) and the regime is not
+CHAOTIC, close it and re-place the bid-ask just under the CURRENT price (same width policy).
+Each re-chase also scores volume. Still respect `max_rebalances_per_hour` and journal the
+distinction ("re-chase, unfilled — no IL realized"). If the position HAS partially filled,
+the normal hysteresis + flip rules apply instead — never fast-rotate inventory.
+
 **Flip check (satellite bid-ask slots below price):** if the position has substantially
 FILLED with the token (price traded down into the range) AND `regime_engine` now shows
 trend_dir=up with a higher low forming (band_pos rising, sell volume drying), close the slot
