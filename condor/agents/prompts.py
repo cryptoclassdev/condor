@@ -347,7 +347,12 @@ def build_tick_prompt(
     if agent_id:
         tick_info += f"\nAgent ID: {agent_id}"
         if not is_dry_run and not is_controller_mode:
-            tick_info += f'\nPass controller_id="{agent_id}" as a TOP-LEVEL arg to manage_executors (not inside executor_config).'
+            tick_info += (
+                f'\nPass controller_id="{agent_id}" in BOTH places on every '
+                f"manage_executors create: as a TOP-LEVEL arg AND inside "
+                f"executor_config (the risk engine validates executor_config."
+                f"controller_id and cancels the create if it is missing or wrong)."
+            )
     sections.append(tick_info)
 
     # Run-once mode note
