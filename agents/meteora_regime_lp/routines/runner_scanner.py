@@ -95,12 +95,18 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
     raw = []
     try:
         async with aiohttp.ClientSession() as session:
-            results = await asyncio.gather(
-                _gecko_get(session, f"networks/{GECKO_NETWORK}/new_pools", {"page": 1}),
-                _gecko_get(session, f"networks/{GECKO_NETWORK}/trending_pools"),
-                _gecko_get(session, f"networks/{GECKO_NETWORK}/dexes/{VENUE}/pools", {"page": 1, "sort": "h24_volume_usd_desc"}),
-                return_exceptions=True,
-            )
+            # Fresh Meteora pools are sparse in network-wide feeds — page DEEP on
+            # new_pools (5 pages ≈ 100 newest network pools) and pull several pages of
+            # the venue's own pool list sorted by recent volume, plus trending.
+            tasks = [
+                _gecko_get(session, f"networks/{GECKO_NETWORK}/new_pools", {"page": p})
+                for p in range(1, 6)
+            ] + [
+                _gecko_get(session, f"networks/{GECKO_NETWORK}/dexes/{VENUE}/pools",
+                           {"page": p, "sort": "h24_volume_usd_desc"})
+                for p in range(1, 4)
+            ] + [_gecko_get(session, f"networks/{GECKO_NETWORK}/trending_pools")]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
         for r in results:
             if isinstance(r, Exception):
                 logger.warning(f"runner_scanner: source failed: {r}")

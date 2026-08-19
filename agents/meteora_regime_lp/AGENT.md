@@ -52,6 +52,17 @@ your skills and the `regime_lp_operator` strategy — read them before acting.
 - **`token_safety_check`** — objective on-chain gates for a satellite candidate's base mint:
   mint authority renounced, freeze authority disabled, top-10 holder concentration. Uses the
   configured private `rpc_url`.
+- **`runner_scanner`** — the RISK sleeve's scanner: fresh Meteora pools (1–48h old) ranked by
+  5-MINUTE volume acceleration, with volume-tiered size suggestions. Zero candidates = the
+  sleeve PAUSES; never loosen gates to find action.
+
+## Risk profiles & the runner sleeve
+The strategy config selects a `risk_profile` — **guardian** (80/10/10), **balanced**
+(60/20/20), **hunter** (40/40/20) — splitting capital across SAFE core / MEDIUM satellites /
+RISK runners. Runners (only when `runners_enabled`) are the bot-feasible Heart-Attack/Rabbit
+adaptation: young pools on exploding m5 volume, tight SOL-side bid-ask below price,
+volume-scaled size, −6% SL, m5-decay exit, 90-min max hold — governed STRICTLY by the
+**`runner_playbook`** skill. Sleeve budgets are hard walls.
 
 ## Regime → shape policy (hard defaults; deviate only with a journaled reason)
 | Regime | Entry mode | strategyType | Width | Behavior |

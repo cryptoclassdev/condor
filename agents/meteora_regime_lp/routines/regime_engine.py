@@ -66,14 +66,21 @@ def _ema(values: list[float], period: int) -> float:
 async def _fetch_ohlcv(session: aiohttp.ClientSession, pool: str, limit: int) -> list[list[float]]:
     url = f"{GECKO_BASE}/networks/{GECKO_NETWORK}/pools/{pool}/ohlcv/hour"
     headers = {"Accept": "application/json;version=20230302"}
-    async with session.get(url, headers=headers, params={"limit": min(limit, 100)},
-                           timeout=aiohttp.ClientTimeout(total=25)) as resp:
-        if resp.status != 200:
-            raise RuntimeError(f"OHLCV {pool} -> HTTP {resp.status}")
-        payload = await resp.json()
-    # Each item: [ts, open, high, low, close, volume]; newest first per Gecko docs.
-    lst = ((payload.get("data") or {}).get("attributes") or {}).get("ohlcv_list") or []
-    return list(reversed([[float(x) for x in row] for row in lst]))  # oldest -> newest
+    last_err = None
+    for attempt in range(3):  # GeckoTerminal free tier rate-limits (429) under load
+        async with session.get(url, headers=headers, params={"limit": min(limit, 100)},
+                               timeout=aiohttp.ClientTimeout(total=25)) as resp:
+            if resp.status == 429:
+                last_err = RuntimeError(f"OHLCV {pool} -> HTTP 429 (rate limited)")
+                await asyncio.sleep(5 * (attempt + 1))
+                continue
+            if resp.status != 200:
+                raise RuntimeError(f"OHLCV {pool} -> HTTP {resp.status}")
+            payload = await resp.json()
+            lst = ((payload.get("data") or {}).get("attributes") or {}).get("ohlcv_list") or []
+            # Each item: [ts, open, high, low, close, volume]; newest first per Gecko docs.
+            return list(reversed([[float(x) for x in row] for row in lst]))  # oldest -> newest
+    raise last_err or RuntimeError(f"OHLCV {pool} -> failed")
 
 
 def _classify(candles: list[list[float]], cfg: Config) -> dict:
@@ -143,11 +150,17 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
 
     results: dict[str, dict] = {}
     try:
+        # Sequential with spacing — parallel OHLCV fetches trip GeckoTerminal's
+        # free-tier rate limit (429), which turned every regime into UNKNOWN.
         async with aiohttp.ClientSession() as session:
-            fetched = await asyncio.gather(
-                *[_fetch_ohlcv(session, p, config.candles) for p in pools],
-                return_exceptions=True,
-            )
+            fetched = []
+            for i, p in enumerate(pools):
+                if i:
+                    await asyncio.sleep(1.5)
+                try:
+                    fetched.append(await _fetch_ohlcv(session, p, config.candles))
+                except Exception as e:
+                    fetched.append(e)
     except Exception as e:
         return f"regime_engine: failed to reach GeckoTerminal: {e}"
 

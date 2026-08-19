@@ -212,13 +212,23 @@ Mechanics, in order:
 4. **Journal the three-outcome test** before the create call: what do we hold if price exits
    above / stays in / exits below — one plain-English line each.
 
-**VERIFY EVERY OPEN — a create call's success response is NOT proof a position exists.**
-Observed twice: the create returns success but the on-chain open silently fails
-(close_type=FAILED, 0 fill, no position). After EVERY create, confirm via
-`manage_executors(action="search", status="RUNNING")` that the new executor is actually
-RUNNING before treating the slot as filled; if it isn't, journal the false-success and
-rebuild the position same tick (or next tick at the latest). Never let the strategy believe
-it has coverage it doesn't.
+**VERIFY EVERY CREATE IN BOTH DIRECTIONS — the framework's status is evidence of NOTHING.**
+Observed live, both ways: (a) create returns success but nothing landed on-chain
+(false-success); (b) create returns FAILED but the position IS live on-chain holding real
+capital, invisible to RUNNING searches forever after (false-failure — this one stranded 55%
+of the book until manual recovery). Therefore after EVERY create, regardless of what it
+reported:
+1. Check RUNNING search for the new executor (catches false-success), AND
+2. **Reconcile the wallet delta**: quote balance should have moved by ≈ the deposit (+rent).
+   - Reported success + no wallet movement → false-success: journal, rebuild.
+   - Reported FAILURE + wallet moved → **false-failure: capital is in a live orphan.** Get
+     its position_address from the executor's detail record, journal it as ORPHAN with the
+     address, notify the operator (`send_notification`), and do NOT count that capital as
+     available or attempt new opens with it. Recovery is operator-level (the executor drops
+     from the live registry once terminal — manage_executors cannot reach it again).
+3. **On any create-failure streak ≥ 2: STOP retrying and reconcile wallet vs book FIRST.**
+   "Where did the money go" is answered before any retry — a funding shortage after a FAILED
+   create is the false-failure signature, not a reason to swap more funds into the attempt.
 
 If the open FAILS simulation → re-check price bracketing + bin count, narrow once, retry once;
 if a swap landed but the open failed, repair (retry with true balance or swap back) — never
