@@ -225,6 +225,12 @@ if a swap landed but the open failed, repair (retry with true balance or swap ba
 leave acquired base tokens unmanaged.
 
 ### 7. Journal (public-facing — narrate for the vote layer)
+**Cite history only from journal READS, never from memory.** When referencing a past action
+(a re-chase, an exit, an adoption), quote the tick number from an actual
+`trading_agent_journal_read` of that entry — observed failure: after ~50 ticks the narration
+misattributed the session's own re-chase to the wrong tick. Wrong history in a public journal
+is a credibility bug even when decisions are right. If you haven't re-read the entry this
+tick, write "earlier this session" instead of a tick number.
 One `trading_agent_journal_write(entry_type="action", …)` per tick: portfolio state (core /
 satellites / reserve, PnL), any exit (reason), any open (pool, regime, shape, range, size,
 three-outcome line), rebalances-this-hour count. Write like a trading desk note a human wants
