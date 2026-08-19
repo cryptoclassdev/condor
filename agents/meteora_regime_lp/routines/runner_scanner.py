@@ -95,15 +95,23 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
     raw = []
     try:
         async with aiohttp.ClientSession() as session:
-            # Fresh Meteora pools are sparse in network-wide feeds — page DEEP on
-            # new_pools (5 pages ≈ 100 newest network pools) and pull several pages of
-            # the venue's own pool list sorted by recent volume, plus trending.
+            # Fresh Meteora pools are sparse in network-wide feeds.
+            # new_pools is the ONLY genuinely young feed, but it is network-wide,
+            # so most of it is not Meteora — page it as deep as the API allows.
+            # The venue list is sorted two ways on purpose: by 24h volume (which
+            # skews old and large) and by 24h tx count, where a young, busy pool
+            # ranks even when its 24h volume is still small because it has only
+            # existed for two hours.
             tasks = [
                 _gecko_get(session, f"networks/{GECKO_NETWORK}/new_pools", {"page": p})
-                for p in range(1, 6)
+                for p in range(1, 11)
             ] + [
                 _gecko_get(session, f"networks/{GECKO_NETWORK}/dexes/{VENUE}/pools",
                            {"page": p, "sort": "h24_volume_usd_desc"})
+                for p in range(1, 4)
+            ] + [
+                _gecko_get(session, f"networks/{GECKO_NETWORK}/dexes/{VENUE}/pools",
+                           {"page": p, "sort": "h24_tx_count_desc"})
                 for p in range(1, 4)
             ] + [_gecko_get(session, f"networks/{GECKO_NETWORK}/trending_pools")]
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -118,7 +126,8 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
     excl_pools = set(config.exclude_pools)
     excl_mints = set(config.exclude_mints)
     seen, candidates = set(), []
-    stats = {"not_meteora": 0, "age": 0, "vol": 0, "accel": 0, "tvl": 0}
+    stats = {"not_meteora": 0, "age_old": 0, "age_young": 0, "age_unknown": 0,
+             "vol": 0, "accel": 0, "tvl": 0, "not_sol": 0, "excluded": 0}
 
     for p in raw:
         attrs = p.get("attributes", {}) or {}
@@ -130,9 +139,20 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         if VENUE not in dex:
             stats["not_meteora"] += 1
             continue
+        # Split three ways deliberately. A single "age" counter conflated "this
+        # pool is too old", "too new" and "the feed did not tell us when it was
+        # created" — and the third is a data problem masquerading as a market
+        # observation. If age_unknown dominates, the venue feed is not returning
+        # pool_created_at and the age gate is rejecting pools it never measured.
         age = _age_hours(attrs.get("pool_created_at"))
-        if age is None or not (config.min_age_hours <= age <= config.max_age_hours):
-            stats["age"] += 1
+        if age is None:
+            stats["age_unknown"] += 1
+            continue
+        if age < config.min_age_hours:
+            stats["age_young"] += 1
+            continue
+        if age > config.max_age_hours:
+            stats["age_old"] += 1
             continue
         vol = attrs.get("volume_usd") or {}
         m5, h1 = _num(vol.get("m5")), _num(vol.get("h1"))
@@ -150,11 +170,15 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         quote_id = (((rel.get("quote_token") or {}).get("data") or {}).get("id") or "")
         base_mint = base_id.split("_", 1)[-1]
         quote_mint = quote_id.split("_", 1)[-1]
-        # SOL must be one side; base = the non-SOL side.
+        # SOL must be one side; base = the non-SOL side. Counted, not silent: an
+        # uncounted reject reads as "nothing was out there" when the truth may be
+        # "everything was out there and this gate ate it".
         if SOL_MINT not in (base_mint, quote_mint):
+            stats["not_sol"] += 1
             continue
         runner_mint = quote_mint if base_mint == SOL_MINT else base_mint
         if runner_mint in excl_mints:
+            stats["excluded"] += 1
             continue
         seen.add(addr)
         candidates.append({
@@ -166,15 +190,22 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
             "tvl": tvl,
             "turnover_m5": m5 / max(tvl, 1.0),
             "base_mint": runner_mint,
-            "mint_pair": f"{runner_mint}-SOL",
+            # Mint-mint, never mint-symbol: a trading_pair with a symbol on either
+            # side is accepted by the tool layer and then silently fails on-chain.
+            "mint_pair": f"{runner_mint}-{SOL_MINT}",
             "price_usd": _num(attrs.get("base_token_price_usd")),
         })
 
     if not candidates:
         return (
             f"runner_scanner: NO candidates passed the gates "
-            f"(rejects — venue:{stats['not_meteora']} age:{stats['age']} m5vol:{stats['vol']} "
-            f"accel:{stats['accel']} tvl:{stats['tvl']}). Runner sleeve should PAUSE — never force entries."
+            f"(scanned:{len(raw)} rejects — venue:{stats['not_meteora']} "
+            f"ageOld:{stats['age_old']} ageYoung:{stats['age_young']} "
+            f"ageUnknown:{stats['age_unknown']} m5vol:{stats['vol']} accel:{stats['accel']} "
+            f"tvl:{stats['tvl']} notSOL:{stats['not_sol']} held:{stats['excluded']}). "
+            f"Runner sleeve should PAUSE — never force entries. "
+            f"If one gate dominates the rejects tick after tick, that gate is mis-set, "
+            f"not the market — say so in the journal rather than pausing silently forever."
         )
 
     candidates.sort(key=lambda c: c["turnover_m5"], reverse=True)
@@ -227,7 +258,9 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
 
     summary = (
         f"runner_scanner: {len(ranked)} runner candidate(s) from {len(candidates)} gated "
-        f"(rejects — age:{stats['age']} m5vol:{stats['vol']} accel:{stats['accel']} tvl:{stats['tvl']}). "
+        f"(rejects — ageOld:{stats['age_old']} ageYoung:{stats['age_young']} "
+        f"ageUnknown:{stats['age_unknown']} m5vol:{stats['vol']} accel:{stats['accel']} "
+        f"tvl:{stats['tvl']} notSOL:{stats['not_sol']}). "
         f"Top: {rows[0]['Pair']} m5 {rows[0]['m5Vol']} ({rows[0]['m5/TVL']} of TVL, tier {rows[0]['SizeTier']}). "
         f"MANDATORY before entry: token_safety_check on BaseMint + sellability. Record at-entry m5 for the decay exit."
     )

@@ -24,7 +24,10 @@ class ExecutorsProvider(BaseProvider):
         bot_names: list[str] | None = None,
         since: float = 0.0,
     ) -> ProviderResult:
-        from condor.agents.performance import fetch_agent_performance
+        from condor.agents.performance import (
+            fetch_agent_performance,
+            fetch_sibling_running,
+        )
 
         if not agent_id:
             return ProviderResult(
@@ -53,6 +56,25 @@ class ExecutorsProvider(BaseProvider):
             )
 
         running = [e for e in perf.executors if e["status"] == "RUNNING"]
+
+        # Positions this session ADOPTED from an earlier session of the same
+        # strategy. They carry the creating session's controller_id, so every
+        # attribution-filtered query misses them — including the one whose
+        # open_count/total_exposure the risk engine enforces its caps against.
+        # Owning a position without counting it is the dangerous direction.
+        adopted = []
+        try:
+            owned_ids = {e["id"] for e in perf.executors if e.get("id")}
+            adopted = [
+                r for r in await fetch_sibling_running(client, agent_id)
+                if r.get("id") not in owned_ids
+            ]
+        except Exception as e:
+            adopted = []
+            log_note = f"  ⚠️ Could not scan for adopted positions ({e}) — exposure below may be UNDERSTATED."
+        else:
+            log_note = ""
+        running = running + adopted
         lines = [
             (
                 f"Active Executors ({len(running)}) [agent: {agent_id}]:"
@@ -60,19 +82,52 @@ class ExecutorsProvider(BaseProvider):
                 else f"Active Executors: none running (agent: {agent_id})"
             )
         ]
+        from condor.fetchers.executors import is_lp_executor
+
+        any_lp = False
         for r in running:
             side = r.get("side") or ""
-            lines.append(
-                f"  {r['pair']} {side} ${r['pnl']:+.2f} (V:${r['volume']:,.0f})"
-            )
+            tag = " [ADOPTED]" if r.get("adopted") else ""
+            if is_lp_executor(r):
+                # An LP row's "volume" is the quote deposited into the range, not
+                # what traded through it. Labelling it V: read as trading volume
+                # and made a dormant, out-of-range position look busy.
+                any_lp = True
+                metric = f"deployed:${r['volume']:,.0f}"
+            else:
+                metric = f"V:${r['volume']:,.0f}"
+            fee_part = f" fees:${r['fees']:+.4f}" if r.get("fees") else ""
+            lines.append(f"  {r['pair']} {side}{tag} ${r['pnl']:+.2f} ({metric}{fee_part})")
         if perf.bot_names:
             lines.append(f"  Bots operated: {', '.join(perf.bot_names)}")
+        fees_label = (
+            f"${perf.fees:+.4f}" if perf.fees_known else f"${perf.fees:+.4f} (incomplete)"
+        )
         lines.append(
             f"  Realized: ${perf.realized_pnl:+.2f} | "
             f"Unrealized: ${perf.unrealized_pnl:+.2f} | "
             f"Total PnL: ${perf.total_pnl:+.2f} | "
-            f"Volume: ${perf.volume:,.0f}"
+            f"Fees earned: {fees_label} | "
+            f"Volume/Deployed: ${perf.volume:,.0f}"
         )
+        if adopted:
+            lines.append(
+                f"  ↩️ {len(adopted)} position(s) marked [ADOPTED] were opened by an earlier "
+                "session of this strategy. They ARE your responsibility and DO count toward "
+                "exposure and the open-executor limit, but their PnL is credited to the "
+                "session that opened them, so the PnL line above excludes them."
+            )
+        if log_note:
+            lines.append(log_note)
+        if any_lp:
+            # Fees are the product of an LP position; without them on this line the
+            # agent was optimising a number it could not observe.
+            lines.append(
+                "  ℹ️ LP rows: the figure above is capital DEPLOYED into ranges, not "
+                "swap volume traded through them — it does not move as the pool trades. "
+                "Judge LP performance on 'Fees earned' and PnL, and read traded volume "
+                "from the pool's own data, never from this line."
+            )
         # Say so rather than letting a missing bot read as a flat one. The figures
         # above are then a floor, and an agent told a floor can go look; an agent
         # told "$0.00" has no reason to.
@@ -97,7 +152,12 @@ class ExecutorsProvider(BaseProvider):
                 "total_volume": perf.volume,
                 "total_fees": perf.fees,
                 "total_exposure": total_exposure,
-                "open_count": perf.open_count,
+                # Includes adopted rows: this is what the risk engine counts
+                # against max_open_executors, and a position you are responsible
+                # for has to be in that number.
+                "open_count": len(running),
+                "owned_open_count": perf.open_count,
+                "adopted_open_count": len(adopted),
                 "closed_count": perf.closed_count,
                 "win_rate": perf.win_rate,
                 # Provenance travels with the figures. Everything downstream —

@@ -96,12 +96,31 @@ def get_executor_pnl(executor: Dict[str, Any]) -> float:
 
 
 def get_executor_volume(executor: Dict[str, Any]) -> float:
-    """Extract filled/traded volume from an executor response."""
+    """Extract filled/traded volume from an executor response.
+
+    Careful with the meaning for LP executors. On a directional/order executor
+    ``filled_amount_quote`` is genuinely traded volume. On a DLMM ``lp_executor``
+    it is the quote *deposited into the position* — it is set the moment the
+    position opens and never moves again, no matter how much swaps through the
+    range. A 13-hour, 146-tick LP session reported a frozen "volume" equal to its
+    deposit and zero swap flow, which is why callers must not present this figure
+    as traded volume for an LP row (see :func:`is_lp_executor`).
+    """
     for key in ("filled_amount_quote", "volume_traded", "total_volume"):
         val = executor.get(key)
         if val is not None and val != 0:
             return float(val)
     return 0.0
+
+
+def is_lp_executor(row: Dict[str, Any]) -> bool:
+    """True when a display row describes a liquidity-provision position.
+
+    Used to label the row's ``volume`` honestly: capital deployed into a range,
+    not volume traded through it.
+    """
+    hay = f"{row.get('type', '')} {row.get('connector', '')}".lower()
+    return "lp_" in hay or hay.startswith("lp") or "clmm" in hay or "meteora" in hay
 
 
 def get_executor_fees(executor: Dict[str, Any]) -> float:

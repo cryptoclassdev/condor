@@ -306,6 +306,56 @@ def _merge_stopped_bot_perf(
     perf.total_pnl = perf.realized_pnl + perf.unrealized_pnl
 
 
+async def fetch_sibling_running(client: Any, agent_id: str) -> list[dict[str, Any]]:
+    """RUNNING executors belonging to OTHER sessions of the same strategy.
+
+    Session ids are ``<agent>.<strategy>_<n>``, and executors carry the
+    controller_id of the session that CREATED them. A restarted session adopts
+    the previous one's live positions, but every performance query filters on
+    ``controller_ids=[agent_id]`` — so an adopted position is invisible to the
+    session now responsible for it.
+
+    That is not only a reporting gap. ``TickEngine`` feeds the provider's
+    ``open_count``/``total_exposure`` straight into ``risk_state``, so
+    ``max_open_executors`` and ``max_position_size_quote`` were being enforced
+    against a book that excluded everything adopted — observed live: a session
+    holding a $39 core and a $20 satellite reported ``open=0, exposure=$0.00``
+    and opened a third position believing it held nothing.
+
+    Returns rows in the same shape as the owned ones, each tagged
+    ``adopted=True``. PnL attribution is deliberately NOT changed anywhere else:
+    the web rollup still credits each session only with what it created, so the
+    same position is never counted twice across sessions.
+    """
+    stem, _, suffix = agent_id.rpartition("_")
+    if not stem or not suffix.isdigit():
+        return []  # not a session-numbered id; nothing to reconcile against
+    prefix = f"{stem}_"
+
+    rows: list[dict[str, Any]] = []
+    try:
+        async for page in walk_pages(
+            partial(client.executors.search_executors, status="RUNNING"),
+            _extract_executors_list,
+            page_size=50,
+            max_items=2000,
+        ):
+            for ex in page:
+                if not isinstance(ex, dict):
+                    continue
+                row = _executor_row(ex)
+                cid = str(row.get("controller_id") or "")
+                if cid and cid != agent_id and cid.startswith(prefix):
+                    row["adopted"] = True
+                    rows.append(row)
+    except Exception as e:
+        # Report nothing rather than a partial book: a half-read sibling list
+        # would understate exposure, which is the failure we are fixing.
+        log.warning("sibling executor scan failed for %s: %s", agent_id, e)
+        return []
+    return rows
+
+
 def _build_perf_from_rows(
     agent_id: str,
     rows: list[dict[str, Any]],
@@ -335,7 +385,10 @@ def _build_perf_from_rows(
         total_pnl=realized_pnl + unrealized,
         volume=volume,
         fees=fees,
-        trade_count=len(rows),
+        # Completed trades only. Counting every row made an open position a
+        # "trade", inflating the count and skewing any per-trade average whose
+        # numerator only ever includes closes.
+        trade_count=len(closed),
         win_rate=win_rate,
         open_count=len(running),
         closed_count=len(closed),

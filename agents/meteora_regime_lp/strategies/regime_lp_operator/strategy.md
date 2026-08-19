@@ -44,7 +44,11 @@ default_config:
   core:
     pair: SOL-USDC
   satellite:
-    max_pct_per_pool: 15
+    # 15% capped a satellite entry at ~$13 on an $88 book, below the ~$4.70 rent
+    # threshold where a position stops being dominated by its own cost. 25% lets a
+    # $20 probe through on a small wallet; on a large book the sleeve budget, not
+    # this cap, is the binding constraint anyway.
+    max_pct_per_pool: 25
   reserve_pct: 10
   take_profit_pct: 12
   trailing_arm_pct: 8
@@ -64,7 +68,13 @@ default_config:
     require_mint_renounced: true
     require_freeze_disabled: true
   risk_limits:
-    min_wallet_sol_reserve: 0.3
+    # Gas only. Position rent (~0.0574 SOL) is budgeted per entry as part of the
+    # entry's cost, so this floor does not need to pre-fund it. At 0.3 (~$25) the
+    # reserve alone made a $20 SOL-quoted satellite arithmetically impossible on
+    # an $88 wallet: 0.2438 quote + 0.0574 rent = 0.3012 needed against 0.4611
+    # held, leaving 0.1599 — under the floor. 0.06 SOL is still thousands of
+    # transactions of headroom.
+    min_wallet_sol_reserve: 0.06
     max_open_slots: 3
     daily_loss_limit_pct: 6
     drawdown_killswitch_pct: 10
@@ -195,19 +205,44 @@ a `learning` when new.
   volume and fee flow live; ranges survive corrections longer), core stays SOL-USDC.
 - **PAUSE rule:** if the scanner returns nothing gated, or `regime_engine` classifies ALL top
   candidates CHAOTIC → no entries this tick (dead/berserk market); journal "paused" and hold.
+  **But a pause is a claim about the market, not a default.** If the scanner's reject
+  breakdown shows one gate eating nearly everything for 3+ consecutive ticks, that gate is
+  mis-set — journal it explicitly as a suspected mis-set gate rather than pausing quietly
+  again. Repeated silent pauses are how both memecoin sleeves sat idle for a whole session.
 - `manage_routines(action="run", name="regime_engine", config={"pool_addresses":
-  [<core pool + top candidates>]})` → per pool: regime + suggested shape/width/skew.
+  [<core pool + top candidates>], "sleeve": <"core" | "satellite" | "runner">})`
+  → per pool: regime + suggested shape/width/skew.
+  Read `VolRecent%/h` / `VolFull%/h` with their `SpanRecent(h)` / `SpanFull(h)` companions —
+  those columns are **bar counts, not fixed windows**. At 5m resolution "24 bars" is 2 hours
+  and "72 bars" is 6 hours. Never describe them as 24h/72h figures unless `Res` is `1h`.
+  **ALWAYS pass `sleeve`.** It sets the CHAOTIC threshold: core 2.5%/h (majors), satellite
+  8%/h, runner 10%/h. Omitting it applies the majors threshold to a memecoin, which stamps
+  essentially every candidate CHAOTIC. Classify the core pool and the satellite/runner
+  candidates in SEPARATE calls — one call carries one sleeve.
+- The engine now auto-steps its candle resolution (1h → 5m → 1m) so pools younger than a day
+  get a real verdict instead of UNKNOWN, and rescales volatility to %/hour either way, so the
+  thresholds compare like-for-like across resolutions. The `Res`/`Bars` columns say which
+  resolution produced the verdict.
 
 ### 5. Gate the candidate (satellites only; core SOL-USDC skips token gates)
 Top candidate must pass ALL, else try the next (max 2/tick):
-- regime ≠ CHAOTIC;
+- regime ≠ CHAOTIC (classified with the correct `sleeve` — see step 4). **HOT is a PASS for
+  satellite/runner**, entered under the four mandatory HOT terms in step 6. Do not treat HOT
+  as a soft CHAOTIC and skip it — that reinstates the bug where these sleeves never opened;
+- regime = UNKNOWN means the engine could not measure it even at 1m resolution (a brand-new
+  pool, or a rate-limited feed). Treat UNKNOWN as a SKIP for this tick — but as a
+  "come back next tick", not a verdict: re-check it rather than blacklisting the pool;
 - `token_safety_check` (config: `base_mint`, `rpc_url`, thresholds from `entry`) → PASS;
 - sellability sanity: the scanner's pool has real two-sided volume across windows (its
   sustained-volume gate) — reject single-spike pools.
 
 ### 6. Open ONE position (regime-shaped)
 Size: core → up to `core.target_pct`% of total; satellite → min(`satellite.max_pct_per_pool`%,
-remaining satellite budget). Never touch the `reserve_pct`% USDC buffer; keep
+remaining satellite budget); **any HOT-regime entry → one third of what that sleeve would
+otherwise deploy, subject to a FLOOR of the position size at which rent stops dominating**
+(rent is ~0.0574 SOL ≈ $4.70; a probe below ~$20 is mostly rent and tests nothing). If the
+sleeve budget cannot fund that floor, journal that the sleeve is underfunded and hold —
+do NOT silently shrink to a sub-rent position. Never touch the `reserve_pct`% USDC buffer; keep
 `min_wallet_sol_reserve` SOL for rent (~0.057/position) + fees — if short, journal and hold.
 
 Shape by regime (from `regime_engine`; full details in the `regime_playbook` skill):
@@ -219,7 +254,24 @@ Shape by regime (from `regime_engine`; full details in the `regime_playbook` ski
 - TRENDING up → same single-sided quote bid-ask, entered on a pullback; plan the flip
   (step 3) for the distribution leg. Never chase the candle with a double-sided open.
 - TRENDING down → skip, or shallow quote-only far below P at reduced size.
-- CHAOTIC → do not open.
+- **HOT (satellite/runner ONLY — core never gets a HOT verdict)** → the pool is realizing
+  8-120%/h (satellite) or 10-150%/h (runner). That is not a reason to stand aside: measured
+  Aug 19, pools at 42-51%/h were carrying 44-66% fee yield, and harvesting exactly that flow
+  is what these sleeves exist for. Enter, but on strictly defensive terms — **all four are
+  mandatory, no exceptions**:
+  1. **PROBE size only** — 1/3 of the sleeve unit, never full, regardless of what the volume
+     ladder suggests.
+  2. **TIGHT range** — 10–25 bins, single-sided quote bid-ask below P, `strategyType:2`.
+     Narrow means the fee density is high where price actually is, and the loss is bounded.
+  3. **Hard stop, no hysteresis** — the sleeve's `stop_loss_pct` is a floor that fires on the
+     first breach. HOT positions do NOT get the patience the core slot gets.
+  4. **Max-hold clock + volume-decay exit** — exit at `max_hold_min` or when pool volume
+     decays past the sleeve's `volume_decay_exit_ratio`, whichever comes first, even at a
+     profit. The edge is the volume burst; when the burst ends the position is just exposure.
+  Journal the at-entry pool volume and the max-hold deadline explicitly — the exit rules are
+  unenforceable without them.
+- CHAOTIC → do not open. Above the abstain ceiling the pool is genuinely berserk, and no
+  sleeve touches it at any size.
 
 Mechanics, in order:
 1. `get_pool_info` → live price `P`, `bin_step`. **Width clamp:** bins =
@@ -254,6 +306,18 @@ If the open FAILS simulation → re-check price bracketing + bin count, narrow o
 if a swap landed but the open failed, repair (retry with true balance or swap back) — never
 leave acquired base tokens unmanaged.
 
+### 6b. Read your own metrics correctly
+`[CORE DATA - executors]` reports LP rows as **`deployed:$X`**, not `V:$X`. That figure is the
+quote you put INTO a range; it is fixed at open and never moves, however much swaps through
+the pool. It is NOT traded volume and must never be reported as volume — in a prior session it
+sat frozen at $25 for 146 ticks and 13 hours while the position did essentially nothing.
+- Judge LP performance on **`Fees earned`** and PnL. Fees are the product; a position that is
+  in-range and earning is working, one that is out-of-range and unfilled is idle capital
+  regardless of how large `deployed` looks.
+- For the campaign's traded-volume axis, read the POOL's own volume from the scanners
+  (`m5Vol`/`h1Vol`/`vol_window`), never from the executor line.
+- Never write a volume claim into the journal or a submission sourced from `deployed`.
+
 ### 7. Journal (public-facing — narrate for the vote layer)
 **Cite history only from journal READS, never from memory.** When referencing a past action
 (a re-chase, an exit, an adoption), quote the tick number from an actual
@@ -265,6 +329,23 @@ One `trading_agent_journal_write(entry_type="action", …)` per tick: portfolio 
 satellites / reserve, PnL), any exit (reason), any open (pool, regime, shape, range, size,
 three-outcome line), rebalances-this-hour count. Write like a trading desk note a human wants
 to read.
+
+**NEVER journal an intention as an outcome.** Every sentence describing a create or a stop
+must carry its verification state, because the tool response is not evidence:
+- `OPENED (CONFIRMED)` — executor RUNNING *and* the wallet delta matches. Only this may be
+  written as a plain "opened".
+- `OPEN ATTEMPTED (UNVERIFIED)` — the call returned, nothing is confirmed yet. Say what you
+  expect the wallet delta to be, and reconcile it next tick before treating the slot as live.
+- `OPEN REJECTED (pre-flight)` — never sent; state the reason (budget floor, gates, reserve).
+- Same three states for stops: `CLOSED (CONFIRMED)` / `CLOSE ATTEMPTED (UNVERIFIED)` /
+  `CLOSE REJECTED`.
+
+Observed twice, and it is why the on-disk journal disagreed with reality: a tick wrote
+"Opening satellite X, $20 probe" as settled fact; the create was pre-flight rejected and no
+position ever existed. A tick's opening line is written before its outcome is known, so a
+decision entry that states the intent as done is wrong the moment it is saved. The journal is
+public and carries the vote — a confident sentence about a position that does not exist costs
+more than an awkward one about a position that might.
 
 ## Dry-run mode (execution_mode=dry_run)
 NEVER call `manage_executors(action="create")` or `action="stop"`, and never execute swaps —

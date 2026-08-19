@@ -209,7 +209,10 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         if price is not None:
             c["price"] = _num(price)
         c["base_mint"] = base_mint
-        c["mint_pair"] = f"{base_mint}-{quote}" if base_mint else c["trading_pair"]
+        # Mint-mint, never mint-symbol: `quote` is the ticker ("USDC"), and a
+        # trading_pair carrying a symbol on either side is accepted by the tool
+        # layer and then silently fails on-chain. quote_mint is the resolved address.
+        c["mint_pair"] = f"{base_mint}-{quote_mint}" if base_mint else c["trading_pair"]
         c["fee_yield"] = (c["vol_window"] * (fee_pct / 100.0)) / max(c["tvl_usd"], 1.0)
         # Max bins < 69 → max total width this pool supports (for the regime shaper).
         try:
