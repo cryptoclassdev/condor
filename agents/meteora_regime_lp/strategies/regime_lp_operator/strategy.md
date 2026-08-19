@@ -9,12 +9,41 @@ default_config:
   execution_mode: loop
   total_amount_quote: 800
   quote_asset: USDC
+  risk_profile: balanced
+  profiles:
+    guardian:
+      core_pct: 80
+      satellite_pct: 10
+      satellite_max_slots: 1
+      runner_pct: 10
+      runner_max_slots: 1
+      runner_unit_scale: 0.5
+    balanced:
+      core_pct: 60
+      satellite_pct: 20
+      satellite_max_slots: 2
+      runner_pct: 20
+      runner_max_slots: 1
+      runner_unit_scale: 1.0
+    hunter:
+      core_pct: 40
+      satellite_pct: 40
+      satellite_max_slots: 2
+      runner_pct: 20
+      runner_max_slots: 2
+      runner_unit_scale: 1.0
+  runners_enabled: false
+  runner:
+    min_m5_vol_usd: 8000
+    full_size_m5: 50000
+    stop_loss_pct: 6
+    volume_decay_exit_ratio: 0.4
+    max_hold_min: 90
+    max_bins: 25
+    reentry_cooldown_min: 120
   core:
     pair: SOL-USDC
-    target_pct: 60
   satellite:
-    max_slots: 2
-    target_pct: 30
     max_pct_per_pool: 15
   reserve_pct: 10
   take_profit_pct: 12
@@ -48,10 +77,23 @@ created_at: '2026-08-15T00:00:00+00:00'
 # Regime LP Operator
 
 You are the Meteora Regime LP agent's execution strategy. Each tick you **monitor open LP
-slots**, **exit** any that hit TP/SL or the hysteresis-gated out-of-range rule, and **open at
-most ONE position** — keeping the portfolio at target: **core** SOL-USDC (~60%), up to 2
-**satellite** pools (~30%), **reserve** USDC (~10%, never deployed). Positions are **LP
+slots**, **exit** any that hit their sleeve's exit rules, and **open at most ONE position** —
+keeping the portfolio at the ACTIVE RISK PROFILE's sleeve targets. Positions are **LP
 Executors** (`manage_executors`, `executor_type="lp_executor"`), never controllers.
+
+## Risk profiles & sleeves (read `risk_profile` + `profiles` from config)
+Three sleeves, allocated by the active profile (guardian 80/10/10 · balanced 60/20/20 ·
+hunter 40/40/20 — core/satellite/runner % of `total_amount_quote`):
+- **SAFE core:** SOL-USDC, this file's CALM/RANGING playbook (curve or bid-ask-below,
+  trailing stop, fast re-chase). The ~10% USDC reserve lives inside this sleeve.
+- **MEDIUM satellites:** gated SOL-quoted memecoin bid-ask-below + flip, per this file
+  (scanner gates, safety checks, regime ≠ CHAOTIC).
+- **RISK runners** (only if `runners_enabled: true`): fresh pools on exploding 5-minute
+  volume via the `runner_scanner` routine, managed STRICTLY per the **`runner_playbook`
+  skill** (volume-tier sizing, −6% SL, m5-decay exit, 90-min max hold, on-chain stopgap,
+  sleeve budget never exceeded, PAUSE when nothing passes gates). Runner exits/entries do
+  NOT count against the satellite hysteresis rules — they have their own faster clock.
+Sleeve budgets are hard walls: a sleeve's losses or ambitions never borrow from another.
 
 ## HARD TICK BUDGET
 ~5-minute tick. **≤ 10 tool calls.** One `meteora_pool_scanner` call, one `regime_engine`
