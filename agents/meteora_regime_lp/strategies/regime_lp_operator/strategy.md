@@ -103,7 +103,12 @@ call, at most one `token_safety_check`. Open at most ONE position per tick.
 `connector_name="solana-mainnet-beta"` · `lp_provider="meteora/clmm"` ·
 `swap_provider="jupiter/router"` · `keep_position=false` · quote = USDC (mint
 `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`). Use **mints, not symbols** in every
-`trading_pair` (scanner returns `MintPair`/`BaseMint`).
+`trading_pair` (scanner returns `MintPair`/`BaseMint`) — **this includes the CORE pair.**
+For SOL-USDC use the mint-pair form
+`So11111111111111111111111111111111111111112-EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`,
+never the symbol `"SOL-USDC"`. Confirmed 2026-08-19: the symbol form resolves price/pool
+fine via `get_pool_info` but silently fails on-chain for `lp_executor` creates — caused a
+FAILED-create streak before the fix. **No exceptions for the core pair going forward.**
 
 **MANDATORY on EVERY `manage_executors(action="create", …)` — swaps AND LP opens:**
 `executor_config` MUST include `"controller_id": "<this session's agent_id>"` (exactly the
@@ -161,10 +166,25 @@ and reopen **single-sided token-side ABOVE P** (`side=2`, Bid-Ask) to distribute
 recovery — the second fee leg. Journal it as `flip`. Never flip while the dump is still in
 motion; the reflow must already be underway.
 
-**After every stop: verify the swap-back leg.** Read wallet balances; if base tokens remain,
-sell the whole balance by mint via an order_executor MARKET sell (pace sells ~2s with an API
-key, 15–20s without; "NO_ROUTE_FOUND … Rate limit" = throttling, retry, don't blacklist).
-Journal every exit with reason + realized PnL + fees + duration, as a `learning` when new.
+**VERIFY EVERY STOP IN BOTH DIRECTIONS TOO — a stop's reported success is equally not proof.**
+Confirmed 2026-08-19 (tick 4, session regime_lp_operator_6): a `stop` call reported success
+but the on-chain Meteora position stayed OPEN, stranding ~$35 with zero wallet return —
+false-failure on the exit side, mirroring the create-side failure mode below. Therefore after
+EVERY stop, regardless of what it reported:
+1. Confirm the executor no longer appears in a `RUNNING` search, AND
+2. **Reconcile the wallet delta**: balances should have moved by ≈ the position's value
+   (+ any rent refund).
+   - Reported success + wallet did NOT move by the expected amount → **false-failure: the
+     position is still live on-chain.** Look it up via `search_history(clmm_positions)` by
+     the position_address, journal it as ORPHAN, notify the operator (`send_notification`),
+     and do NOT retry the stop — a terminal-marked executor drops from `manage_executors`'
+     live registry and cannot be reached again by this tool. Recovery is operator-level.
+
+**After every stop that DID verify clean: verify the swap-back leg.** Read wallet balances;
+if base tokens remain, sell the whole balance by mint via an order_executor MARKET sell
+(pace sells ~2s with an API key, 15–20s without; "NO_ROUTE_FOUND … Rate limit" = throttling,
+retry, don't blacklist). Journal every exit with reason + realized PnL + fees + duration, as
+a `learning` when new.
 
 ### 4. Rank + classify (only if a bucket is below target)
 - `manage_routines(action="run", name="meteora_pool_scanner",
