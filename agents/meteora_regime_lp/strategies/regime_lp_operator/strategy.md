@@ -44,6 +44,10 @@ default_config:
   core:
     pair: SOL-USDC
   satellite:
+    # Satellites are slower than runners but are NOT open-ended. Without this the
+    # agent inferred its own exit deadline from the runner sleeve's 90-min
+    # precedent — a hard exit rule should never be improvised.
+    max_hold_min: 120
     # 15% capped a satellite entry at ~$13 on an $88 book, below the ~$4.70 rent
     # threshold where a position stops being dominated by its own cost. 25% lets a
     # $20 probe through on a small wallet; on a large book the sleeve budget, not
@@ -106,7 +110,9 @@ hunter 40/40/20 — core/satellite/runner % of `total_amount_quote`):
 Sleeve budgets are hard walls: a sleeve's losses or ambitions never borrow from another.
 
 ## HARD TICK BUDGET
-~5-minute tick. **≤ 10 tool calls.** One `meteora_pool_scanner` call, one `regime_engine`
+~5-minute tick. **≤ 12 tool calls**, of which the FIRST is always `orphan_guard`
+(step 0) — reconciliation is not optional and is not the thing you drop when the budget is
+tight. One `meteora_pool_scanner` call, one `regime_engine`
 call, at most one `token_safety_check`. Open at most ONE position per tick.
 
 ## Constants
@@ -130,6 +136,39 @@ the create auto-approves within risk limits.
 
 ## Each tick
 
+### 0. RECONCILE — chain vs registry, before anything else
+`manage_routines(action="run", name="orphan_guard", config={"clear_ghosts": true,
+"max_actions": 1})` — **every tick, first call, no exceptions.**
+
+Executor state is not authoritative in either direction and neither is the position cache;
+only the chain is. Five distinct execution-layer failures were observed live on Aug 18–19
+(false-FAILED create, false-SUCCESS stop ×2, stale clean-exit report, false-RUNNING
+executor), and an orphaned position spent an hour ~29% under water with a dead stop-loss
+because nothing was reconciling. This step is what makes the loop safe to leave alone.
+
+Act on what it reports:
+- **GHOST** (executor RUNNING, no position on-chain) → cleared automatically by the config
+  above. Stopping an executor for a position that does not exist cannot lose money, and
+  while the ghost stands the sleeve believes that slot is full and will not re-open.
+- **ORPHAN** (position on-chain, no executor) → it has NO stop-loss and NO max-hold; nothing
+  is managing it. Journal the address immediately. If the SAME address is reported as an
+  orphan again on the NEXT tick, close it: re-run with
+  `config={"close_address": "<address>"}`. Two consecutive reports ≈ 10 minutes, the same
+  protection the age gate gives, and it works when the position's age is unreadable (which
+  it was for the live orphan). Never close on a single sighting — a create that has not
+  finished settling looks identical to an orphan.
+- **PHANTOM** cache records → report only, NEVER close. The cache reported 9 OPEN positions
+  when the chain held 1. Closing those was the trap the first version of this routine
+  nearly walked into.
+- **Value(quote)/Fees(quote)/Fill** are in QUOTE token units, not USD (the gateway exposes
+  no USD field). Watch **Fill**: `100% BASE (fully filled)` on a quote-side bid-ask means it
+  bought the whole way down and holds no quote at all — that is the drawdown state, and it
+  is invisible in every other view.
+
+If the routine says it could not read the executor list, or that `positions_owned` failed
+for a pool, treat that pool as UNCLASSIFIED, not clean, and do not open anything new there
+this tick.
+
 ### 1. Load state — ADOPT every live slot (critical after a restart)
 If `[CORE DATA]` shows no open slots, verify against reality:
 `manage_executors(action="search", executor_types=["lp_executor"], status="RUNNING")` and
@@ -151,6 +190,9 @@ Per RUNNING slot read `net_pnl_pct`, `state`, `out_of_range_seconds`. Track each
   current PnL ≤ peak − `trailing_gap_pct`. (CALM slots use fixed `take_profit_pct` instead —
   a calm major won't 5x, take the fee income.)
 - `net_pnl_pct ≤ −stop_loss_pct` (hard floor, all slots);
+- **Max hold**: satellites exit at `satellite.max_hold_min` from entry, runners at
+  `runner.max_hold_min`. Journal the deadline as a UTC timestamp when you open, or the rule
+  is unenforceable;
 - **Volume decay**: pool 1h volume < `volume_decay_exit_ratio` × its at-entry level — fees
   are the product, volume is the input; exit even at flat PnL;
 - OUT_OF_RANGE for ≥ `out_of_range_max_sec` AND price beyond the range edge by more than
