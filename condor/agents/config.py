@@ -6,6 +6,7 @@ in the agent directory, editable via key=value messages or web UI.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
@@ -149,6 +150,27 @@ def load_full_config(
         result.setdefault(k, v)
 
     return result
+
+
+def merge_config(
+    configured: Mapping[str, Any], overrides: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Merge per-session overrides without dropping nested strategy safeguards.
+
+    Web/API callers commonly override one generic risk field. A shallow ``dict.update``
+    replaces the entire strategy-specific ``risk_limits`` block, silently removing keys
+    such as gas reserves, daily loss limits, and shutdown thresholds. Mapping values are
+    therefore merged recursively; scalar/list values still replace the configured value.
+    """
+
+    merged = dict(configured)
+    for key, value in overrides.items():
+        existing = merged.get(key)
+        if isinstance(existing, Mapping) and isinstance(value, Mapping):
+            merged[key] = merge_config(existing, value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def save_full_config(agent_dir: Path, config: dict[str, Any]) -> None:

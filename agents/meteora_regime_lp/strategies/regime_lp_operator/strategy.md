@@ -8,6 +8,10 @@ default_config:
   # Safety checks run every minute. Market ranking remains a 5-minute deep task.
   frequency_sec: 60
   execution_mode: loop
+  # The finals require a fully unattended 48-hour run. If Condor itself
+  # restarts, the loop supervisor starts a fresh session and the first tick
+  # adopts any still-open on-chain LP positions before making decisions.
+  restart_on_boot: true
   total_amount_quote: 800
   quote_asset: USDC
   risk_profile: balanced

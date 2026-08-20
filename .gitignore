@@ -196,3 +196,6 @@ agents/**/sessions/
 agents/**/dry_runs/
 agents/**/delegations/
 .restart-bundle-backup-*/
+
+# Local skill telemetry (project learnings remain tracked).
+.superstack/telemetry.jsonl

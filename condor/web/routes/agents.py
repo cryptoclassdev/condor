@@ -1558,10 +1558,10 @@ async def update_strategy_config(
 ):
     """Update a strategy's runtime config."""
     strategy = _get_strategy(slug, sslug)
-    from condor.agents.config import load_full_config, save_full_config
+    from condor.agents.config import load_full_config, merge_config, save_full_config
 
     config_dict = load_full_config(strategy.dir, strategy.default_config)
-    config_dict.update(req.config)
+    config_dict = merge_config(config_dict, req.config)
     save_full_config(strategy.dir, config_dict)
     return {"updated": True, "config": config_dict}
 
@@ -1735,12 +1735,12 @@ async def start_strategy(
 
 async def _start(agent, strategy, req: StartStrategyRequest, user_id: int) -> dict:
     """Spawn a TickEngine session for ``strategy`` under ``agent``."""
-    from condor.agents.config import load_full_config
+    from condor.agents.config import load_full_config, merge_config
     from condor.agents.engine import TickEngine
 
     config_dict = load_full_config(strategy.dir, strategy.default_config)
     if req.config:
-        config_dict.update(req.config)
+        config_dict = merge_config(config_dict, req.config)
 
     if req.trading_context:
         config_dict["trading_context"] = req.trading_context
