@@ -50,14 +50,22 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 from telegram.ext import ContextTypes
+
 from config_manager import get_client
 
 logger = logging.getLogger(__name__)
 
 CATEGORY = "Analysis"
 
-_TS_KEYS = ("created_at", "opened_at", "open_timestamp", "timestamp",
-            "created_timestamp", "open_time", "block_time")
+_TS_KEYS = (
+    "created_at",
+    "opened_at",
+    "open_timestamp",
+    "timestamp",
+    "created_timestamp",
+    "open_time",
+    "block_time",
+)
 _ADDR_KEYS = ("position_address", "position", "address", "nft_address", "position_nft")
 _POOL_KEYS = ("pool_address", "pool", "pool_id", "poolAddress")
 # The gateway returns NO USD/value field. Confirmed from a live record (Aug 19):
@@ -76,18 +84,26 @@ class Config(BaseModel):
     """Reconcile on-chain LP positions against live executors, both directions."""
 
     connector: str = Field(default="meteora", description="CLMM connector")
-    network: str = Field(default="solana-mainnet-beta", description="Gateway network id")
-    min_orphan_age_min: float = Field(
-        default=10.0, description="Never auto-close an orphan younger than this (minutes)"
+    network: str = Field(
+        default="solana-mainnet-beta", description="Gateway network id"
     )
-    close_orphans: bool = Field(default=False, description="Arm orphan closing. Default audit-only.")
+    min_orphan_age_min: float = Field(
+        default=10.0,
+        description="Never auto-close an orphan younger than this (minutes)",
+    )
+    close_orphans: bool = Field(
+        default=False, description="Arm orphan closing. Default audit-only."
+    )
     clear_ghosts: bool = Field(
         default=False,
         description="Stop executors whose position is not on-chain. Frees the sleeve slot.",
     )
-    max_actions: int = Field(default=1, description="Max closes + ghost-stops in one run")
+    max_actions: int = Field(
+        default=1, description="Max closes + ghost-stops in one run"
+    )
     close_address: str = Field(
-        default="", description="Close exactly this position address (still requires on-chain confirmation)"
+        default="",
+        description="Close exactly this position address (still requires on-chain confirmation)",
     )
     extra_pools: list[str] = Field(
         default=[], description="Additional pool addresses to check for owned positions"
@@ -95,7 +111,11 @@ class Config(BaseModel):
     suspect_close_lookback_min: float = Field(
         default=240.0,
         description="Scan closes terminated within this many minutes for the two known "
-                    "upstream false-report signatures. 0 disables.",
+        "upstream false-report signatures. 0 disables.",
+    )
+    max_phantom_rows: int = Field(
+        default=5,
+        description="Maximum individual phantom-cache rows to render; the full count is preserved",
     )
 
 
@@ -176,14 +196,29 @@ def _fill_state(rec: dict) -> str:
 # Neither is visible in the response. Both are visible in the executor record
 # afterwards, which is what this scan reads.
 _PROCEEDS_KEYS = (
-    "base_amount", "quote_amount", "base_fee", "quote_fee",
-    "position_rent_refunded", "base_token_amount_removed",
-    "quote_token_amount_removed", "base_fee_amount_collected",
+    "base_amount",
+    "quote_amount",
+    "base_fee",
+    "quote_fee",
+    "position_rent_refunded",
+    "base_token_amount_removed",
+    "quote_token_amount_removed",
+    "base_fee_amount_collected",
     "quote_fee_amount_collected",
 )
-_CLOSE_HASH_KEYS = ("close_tx_hash", "close_signature", "exchange_order_id", "signature")
-_ALREADY_CLOSED_MARKS = ("already closed", "already_closed", "skipping close",
-                         "not found - marking complete", "position may never have been created")
+_CLOSE_HASH_KEYS = (
+    "close_tx_hash",
+    "close_signature",
+    "exchange_order_id",
+    "signature",
+)
+_ALREADY_CLOSED_MARKS = (
+    "already closed",
+    "already_closed",
+    "skipping close",
+    "not found - marking complete",
+    "position may never have been created",
+)
 
 
 def _proceeds_report(rec: dict) -> tuple[str, dict]:
@@ -226,13 +261,25 @@ async def _recent_terminated(client, lookback_min: float) -> list[dict]:
     cutoff = _t.time() - lookback_min * 60.0
     out, cursor = [], None
     for _ in range(20):
-        res = await client.executors.search_executors(status="TERMINATED", limit=50, cursor=cursor)
-        page = (res.get("data") or res.get("executors") or []) if isinstance(res, dict) else (res or [])
+        res = await client.executors.search_executors(
+            status="TERMINATED", limit=50, cursor=cursor
+        )
+        page = (
+            (res.get("data") or res.get("executors") or [])
+            if isinstance(res, dict)
+            else (res or [])
+        )
         for e in page:
             if not isinstance(e, dict):
                 continue
             ts = None
-            for k in ("close_timestamp", "closed_at", "terminated_at", "timestamp", "close_time"):
+            for k in (
+                "close_timestamp",
+                "closed_at",
+                "terminated_at",
+                "timestamp",
+                "close_time",
+            ):
                 v = e.get(k)
                 if v is not None:
                     ts = _num(v, 0.0)
@@ -297,13 +344,18 @@ async def _cached_open(client, cfg: Config) -> list[dict]:
     # routine that timed out on 37 of 75 ticks overnight. The authority read is
     # what decides truth.
     res = await client.gateway_clmm.search_positions(
-        network=cfg.network, connector=cfg.connector, status="OPEN", limit=50,
+        network=cfg.network,
+        connector=cfg.connector,
+        status="OPEN",
+        limit=50,
     )
     rows = (res.get("data") or []) if isinstance(res, dict) else (res or [])
     return [r for r in rows if isinstance(r, dict)]
 
 
-async def _owned_in_pool(client, cfg: Config, pool: str, attempts: int = 2) -> dict[str, dict]:
+async def _owned_in_pool(
+    client, cfg: Config, pool: str, attempts: int = 2
+) -> dict[str, dict]:
     """Authority: what the wallet actually holds in ``pool``, keyed by address.
 
     Retried with backoff. A single transient 429 here does not degrade gracefully
@@ -318,7 +370,9 @@ async def _owned_in_pool(client, cfg: Config, pool: str, attempts: int = 2) -> d
             await asyncio.sleep(1.0 * i)
         try:
             res = await client.gateway_clmm.get_positions_owned(
-                connector=cfg.connector, network=cfg.network, pool_address=pool,
+                connector=cfg.connector,
+                network=cfg.network,
+                pool_address=pool,
             )
             break
         except Exception as e:
@@ -338,8 +392,14 @@ async def _owned_in_pool(client, cfg: Config, pool: str, attempts: int = 2) -> d
 async def _running_executors(client) -> list[dict]:
     rows, cursor = [], None
     for _ in range(20):
-        res = await client.executors.search_executors(status="RUNNING", limit=50, cursor=cursor)
-        page = (res.get("data") or res.get("executors") or []) if isinstance(res, dict) else (res or [])
+        res = await client.executors.search_executors(
+            status="RUNNING", limit=50, cursor=cursor
+        )
+        page = (
+            (res.get("data") or res.get("executors") or [])
+            if isinstance(res, dict)
+            else (res or [])
+        )
         rows.extend([e for e in page if isinstance(e, dict)])
         cursor = res.get("next_cursor") if isinstance(res, dict) else None
         if not cursor or not page:
@@ -374,7 +434,9 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
     try:
         cached = await _cached_open(client, config)
     except Exception as e:
-        logger.info(f"orphan_guard: cache discovery failed ({e}) — continuing with executor pools only")
+        logger.info(
+            f"orphan_guard: cache discovery failed ({e}) — continuing with executor pools only"
+        )
         cached = []
 
     pools: set = set(p for p in config.extra_pools if p)
@@ -455,40 +517,55 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         is_tracked = addr in tracked_addrs
         if not is_tracked:
             orphans.append({"addr": addr, "age": age, "rec": rec})
-        rows.append({
-            "Position": f"{addr[:8]}…{addr[-4:]}",
-            "State": "healthy" if is_tracked else "ORPHAN",
-            "Pool": (_pick(rec, _POOL_KEYS) or "?")[:8],
-            "Age(min)": "?" if age is None else round(age, 1),
-            "InRange": rec.get("in_range"),
-            "Value(quote)": f"{_value_quote(rec):,.6g}",
-            "Fees(quote)": f"{_fees_quote(rec):,.6g}",
-            "Fill": _fill_state(rec),
-            "Address": addr,
-        })
+        rows.append(
+            {
+                "Position": f"{addr[:8]}…{addr[-4:]}",
+                "State": "healthy" if is_tracked else "ORPHAN",
+                "Pool": (_pick(rec, _POOL_KEYS) or "?")[:8],
+                "Age(min)": "?" if age is None else round(age, 1),
+                "InRange": rec.get("in_range"),
+                "Value(quote)": f"{_value_quote(rec):,.6g}",
+                "Fees(quote)": f"{_fees_quote(rec):,.6g}",
+                "Fill": _fill_state(rec),
+                "Address": addr,
+            }
+        )
 
     for rec in cached:
         addr = _pick(rec, _ADDR_KEYS)
         if addr and addr not in confirmed:
             phantoms.append(addr)
-            rows.append({
-                "Position": f"{addr[:8]}…{addr[-4:]}",
-                "State": "phantom-cache",
-                "Pool": (_pick(rec, _POOL_KEYS) or "?")[:8],
-                "Age(min)": "?" if _age_min(rec) is None else round(_age_min(rec), 1),
-                "InRange": rec.get("in_range"),
-                "Value(quote)": f"{_value_quote(rec):,.6g}",
-            "Fees(quote)": f"{_fees_quote(rec):,.6g}",
-            "Fill": _fill_state(rec),
-                "Address": addr,
-            })
+            if len(phantoms) <= max(0, config.max_phantom_rows):
+                rows.append(
+                    {
+                        "Position": f"{addr[:8]}…{addr[-4:]}",
+                        "State": "phantom-cache",
+                        "Pool": (_pick(rec, _POOL_KEYS) or "?")[:8],
+                        "Age(min)": (
+                            "?" if _age_min(rec) is None else round(_age_min(rec), 1)
+                        ),
+                        "InRange": rec.get("in_range"),
+                        "Value(quote)": f"{_value_quote(rec):,.6g}",
+                        "Fees(quote)": f"{_fees_quote(rec):,.6g}",
+                        "Fill": _fill_state(rec),
+                        "Address": addr,
+                    }
+                )
 
     for g in ghosts:
-        rows.append({
-            "Position": "—", "State": "GHOST(exec)", "Pool": "—", "Age(min)": "—",
-            "InRange": "—", "Value(quote)": "—", "Fees(quote)": "—", "Fill": "—",
-            "Address": g["executor_id"],
-        })
+        rows.append(
+            {
+                "Position": "—",
+                "State": "GHOST(exec)",
+                "Pool": "—",
+                "Age(min)": "—",
+                "InRange": "—",
+                "Value(quote)": "—",
+                "Fees(quote)": "—",
+                "Fill": "—",
+                "Address": g["executor_id"],
+            }
+        )
 
     head = (
         f"orphan_guard: chain says {len(confirmed)} position(s) across {len(pools)} pool(s); "
@@ -503,7 +580,9 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
     suspect_zero, suspect_never, suspect_unknown = [], [], []
     if config.suspect_close_lookback_min > 0:
         try:
-            for ex in await _recent_terminated(client, config.suspect_close_lookback_min):
+            for ex in await _recent_terminated(
+                client, config.suspect_close_lookback_min
+            ):
                 verdict, flat = _proceeds_report(ex)
                 if verdict == "OK":
                     continue
@@ -524,7 +603,10 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
             )
 
     if suspect_never:
-        addrs = ", ".join(e["address"][:8] + "…" for e in suspect_never if e["address"]) or "address not recorded"
+        addrs = (
+            ", ".join(e["address"][:8] + "…" for e in suspect_never if e["address"])
+            or "address not recorded"
+        )
         notes.append(
             f"🚨 {len(suspect_never)} recent close(s) reported 'already closed / position not "
             f"found' and were marked COMPLETE — upstream, that path NEVER SENDS A CLOSE "
@@ -552,9 +634,15 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         )
 
     if phantoms:
+        omitted = max(0, len(phantoms) - max(0, config.max_phantom_rows))
         notes.append(
             f"⚠️ {len(phantoms)} record(s) appear OPEN in the position cache but the chain "
-            f"does not hold them — cache artifacts, NOT orphans. Never closed."
+            f"does not hold them — cache artifacts, NOT orphans. Never closed. "
+            + (
+                f"Only {config.max_phantom_rows} shown; {omitted} repetitive rows omitted."
+                if omitted
+                else ""
+            )
         )
     if unreadable:
         notes.append(
@@ -583,11 +671,22 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
                 f"(either tracked, not on-chain, or in an unreadable pool) — refusing."
             )
     elif config.close_orphans:
-        eligible = [o for o in orphans if o["age"] is not None and o["age"] >= config.min_orphan_age_min]
+        eligible = [
+            o
+            for o in orphans
+            if o["age"] is not None and o["age"] >= config.min_orphan_age_min
+        ]
         if any(o["age"] is None for o in orphans):
-            acted.append("❓ orphan(s) with unreadable age left alone — name one via close_address.")
-        if any(o["age"] is not None and o["age"] < config.min_orphan_age_min for o in orphans):
-            acted.append(f"⏳ orphan(s) under {config.min_orphan_age_min:g} min left alone — a fresh create looks identical.")
+            acted.append(
+                "❓ orphan(s) with unreadable age left alone — name one via close_address."
+            )
+        if any(
+            o["age"] is not None and o["age"] < config.min_orphan_age_min
+            for o in orphans
+        ):
+            acted.append(
+                f"⏳ orphan(s) under {config.min_orphan_age_min:g} min left alone — a fresh create looks identical."
+            )
         to_close = eligible[:budget]
 
     for o in to_close:
@@ -598,20 +697,26 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         pool = _pick(o["rec"], _POOL_KEYS)
         try:
             await client.gateway_clmm.close_position(
-                connector=config.connector, network=config.network, position_address=addr,
+                connector=config.connector,
+                network=config.network,
+                position_address=addr,
             )
         except Exception as e:
-            acted.append(f"❌ close FAILED for {addr[:8]}…: {e} — may still be open, re-run.")
+            acted.append(
+                f"❌ close FAILED for {addr[:8]}…: {e} — may still be open, re-run."
+            )
             continue
         try:
             still = await _owned_in_pool(client, config, pool) if pool else {}
             acted.append(
                 f"❌ close reported SUCCESS but {addr[:8]}… is STILL held on-chain — false-success, escalate."
-                if addr in still else
-                f"✅ closed {addr[:8]}… — confirmed gone from the pool's owned-positions read."
+                if addr in still
+                else f"✅ closed {addr[:8]}… — confirmed gone from the pool's owned-positions read."
             )
         except Exception as e:
-            acted.append(f"⚠️ closed {addr[:8]}… but could NOT verify ({e}) — unconfirmed, re-run.")
+            acted.append(
+                f"⚠️ closed {addr[:8]}… but could NOT verify ({e}) — unconfirmed, re-run."
+            )
 
     if config.clear_ghosts:
         for g in ghosts:
@@ -631,8 +736,8 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
                 )
                 acted.append(
                     f"❌ ghost executor {eid[:8]}… still RUNNING after stop — escalate."
-                    if still_running else
-                    f"✅ ghost executor {eid[:8]}… stopped; its sleeve slot is free again."
+                    if still_running
+                    else f"✅ ghost executor {eid[:8]}… stopped; its sleeve slot is free again."
                 )
             except Exception as e:
                 acted.append(f"⚠️ stopped ghost {eid[:8]}… but could NOT verify ({e}).")
@@ -653,21 +758,38 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         else:
             notes.append("Chain and executor registry agree. Book is consistent.")
     elif not (config.close_orphans or config.clear_ghosts or config.close_address):
-        notes.append("AUDIT ONLY — arm with close_orphans / clear_ghosts. Journal each finding first.")
+        notes.append(
+            "AUDIT ONLY — arm with close_orphans / clear_ghosts. Journal each finding first."
+        )
 
     summary = " ".join([head] + notes + acted)
-    columns = ["Position", "State", "Pool", "Age(min)", "InRange",
-               "Value(quote)", "Fees(quote)", "Fill", "Address"]
+    columns = [
+        "Position",
+        "State",
+        "Pool",
+        "Age(min)",
+        "InRange",
+        "Value(quote)",
+        "Fees(quote)",
+        "Fill",
+        "Address",
+    ]
 
     try:
         from condor.reports import ReportBuilder
+
         b = ReportBuilder("Orphan Guard — chain vs executor registry")
-        b.source("routine", "orphan_guard").tags(["lp", "meteora", "orphan", "ghost", "recovery"])
+        b.source("routine", "orphan_guard").tags(
+            ["lp", "meteora", "orphan", "ghost", "recovery"]
+        )
         b.kpi("On-chain", str(len(confirmed)))
         b.kpi("Executors", str(len(execs)))
         b.kpi("Orphans", str(len(orphans)))
         b.kpi("Ghosts", str(len(ghosts)))
-        b.kpi("Suspect closes", str(len(suspect_zero) + len(suspect_never) + len(suspect_unknown)))
+        b.kpi(
+            "Suspect closes",
+            str(len(suspect_zero) + len(suspect_never) + len(suspect_unknown)),
+        )
         b.kpi("Phantom cache", str(len(phantoms)))
         b.markdown(summary)
         b.table(rows, columns)
@@ -678,11 +800,14 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
 
     try:
         from routines.base import RoutineResult
+
         return RoutineResult(text=summary, table_data=rows, table_columns=columns)
     except Exception:
         lines = [summary, ""]
         for r in rows:
-            lines.append(f"{r['Position']} | {r['State']} | pool {r['Pool']} | age {r['Age(min)']} "
-                         f"| inRange {r['InRange']} | val {r['Value(quote)']} | fees {r['Fees(quote)']} "
-                         f"| {r['Fill']} | {r['Address']}")
+            lines.append(
+                f"{r['Position']} | {r['State']} | pool {r['Pool']} | age {r['Age(min)']} "
+                f"| inRange {r['InRange']} | val {r['Value(quote)']} | fees {r['Fees(quote)']} "
+                f"| {r['Fill']} | {r['Address']}"
+            )
         return "\n".join(lines)

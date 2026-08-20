@@ -146,6 +146,21 @@ def test_get_state_null_tracker_stays_unblocked():
     assert state.executor_count == 0
 
 
+def test_strategy_risk_limit_aliases_are_enforced():
+    """Strategy-facing names must not silently fall back to platform defaults."""
+    limits = RiskLimits.from_dict(
+        {
+            "max_open_slots": 3,
+            "drawdown_killswitch_pct": 10,
+            "daily_loss_limit_pct": 6,
+        }
+    )
+
+    assert limits.max_open_executors == 3
+    assert limits.max_drawdown_pct == 6
+    assert limits.shutdown_drawdown_pct == 10
+
+
 def test_callback_cumulative_exposure_cancelled_same_tick():
     engine = RiskEngine(RiskLimits(max_position_size_quote=500.0))
     state = RiskState(total_exposure=250.0)

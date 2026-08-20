@@ -23,13 +23,14 @@ Run token_safety_check on the BaseMint BEFORE any entry — this scanner does
 liquidity/volume gates only, not honeypot/authority gates.
 """
 
-import logging
 import asyncio
+import logging
 from datetime import datetime, timezone
 
 import aiohttp
 from pydantic import BaseModel, Field
 from telegram.ext import ContextTypes
+
 from config_manager import get_client
 
 logger = logging.getLogger(__name__)
@@ -47,24 +48,38 @@ class Config(BaseModel):
     """Rank fresh Meteora pools by 5-minute volume for the runner sleeve."""
 
     top_n: int = Field(default=5, description="Ranked candidates to return")
-    min_age_hours: float = Field(default=1.0, description="Min pool age (skip launch candle)")
-    max_age_hours: float = Field(default=48.0, description="Max pool age (runners are young)")
-    min_m5_vol_usd: float = Field(default=8000.0, description="Min 5-minute volume in USD")
+    min_age_hours: float = Field(
+        default=1.0, description="Min pool age (skip launch candle)"
+    )
+    max_age_hours: float = Field(
+        default=48.0, description="Max pool age (runners are young)"
+    )
+    min_m5_vol_usd: float = Field(
+        default=8000.0, description="Min 5-minute volume in USD"
+    )
     accel_ratio: float = Field(
         default=3.0,
         description="m5 must be >= this multiple of the average 5-min slice of h1 (m5 >= ratio*h1/12)",
     )
     min_tvl_usd: float = Field(default=10000.0, description="Min TVL")
-    max_tvl_usd: float = Field(default=500000.0, description="Max TVL (small enough to run)")
-    full_size_m5: float = Field(default=50000.0, description="m5 USD volume that earns a FULL runner unit")
-    exclude_pools: list[str] = Field(default=[], description="Held/blocked pool addresses")
+    max_tvl_usd: float = Field(
+        default=500000.0, description="Max TVL (small enough to run)"
+    )
+    full_size_m5: float = Field(
+        default=50000.0, description="m5 USD volume that earns a FULL runner unit"
+    )
+    exclude_pools: list[str] = Field(
+        default=[], description="Held/blocked pool addresses"
+    )
     exclude_mints: list[str] = Field(default=[], description="Held/blocked base mints")
 
 
 async def _gecko_get(session, path, params=None):
     headers = {"Accept": "application/json;version=20230302"}
     async with session.get(
-        f"{GECKO_BASE}/{path}", headers=headers, params=params,
+        f"{GECKO_BASE}/{path}",
+        headers=headers,
+        params=params,
         timeout=aiohttp.ClientTimeout(total=25),
     ) as resp:
         if resp.status != 200:
@@ -82,6 +97,43 @@ def _num(v, default=0.0):
 def _age_hours(created_at: str | None) -> float | None:
     if not created_at:
         return None
+
+
+def summarize_no_candidates(*, raw_count: int, stats: dict[str, int]) -> str:
+    """Explain zero results without mislabeling network-wide reach as a gate."""
+
+    pool_count = max(0, raw_count - stats.get("not_meteora", 0))
+    gates = [
+        ("ageUnknown", stats.get("age_unknown", 0)),
+        ("ageYoung", stats.get("age_young", 0)),
+        ("ageOld", stats.get("age_old", 0)),
+        ("m5vol", stats.get("vol", 0)),
+        ("accel", stats.get("accel", 0)),
+        ("tvl", stats.get("tvl", 0)),
+        ("notSOL", stats.get("not_sol", 0)),
+        ("held", stats.get("excluded", 0)),
+    ]
+    breakdown = " ".join(f"{key}:{value}" for key, value in gates)
+    top, top_count = max(gates, key=lambda item: item[1])
+    verdict = (
+        f"The binding gate is **{top}** ({top_count}/{pool_count} of the Meteora pools seen). "
+        if pool_count and top_count
+        else "No Meteora pool reached the gates at all — this is a REACH problem, not a gate "
+        "problem: the feeds returned nothing from this venue. Check the scanner's sources "
+        "before touching any threshold. "
+    )
+    return (
+        "runner_scanner: NO candidates passed the gates. "
+        f"REACH: scanned {raw_count} pools, of which {pool_count} were Meteora "
+        f"({stats.get('not_meteora', 0)} were other venues — structural, the new_pools feed "
+        "is network-wide, NOT a mis-set gate and never to be reported as one). "
+        f"GATES (out of those {pool_count} Meteora pools): {breakdown}. "
+        f"{verdict}"
+        "Runner sleeve should PAUSE — never force entries. If the SAME gate above binds tick "
+        "after tick, say so explicitly in the journal and name the threshold and its configured "
+        "value, so the operator can judge whether the market is quiet or the number is wrong. "
+        "Pausing silently forever is the failure mode; so is blaming the venue filter."
+    )
     try:
         dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
         return (datetime.now(timezone.utc) - dt).total_seconds() / 3600.0
@@ -102,18 +154,31 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
             # skews old and large) and by 24h tx count, where a young, busy pool
             # ranks even when its 24h volume is still small because it has only
             # existed for two hours.
-            tasks = [
-                _gecko_get(session, f"networks/{GECKO_NETWORK}/new_pools", {"page": p})
-                for p in range(1, 11)
-            ] + [
-                _gecko_get(session, f"networks/{GECKO_NETWORK}/dexes/{VENUE}/pools",
-                           {"page": p, "sort": "h24_volume_usd_desc"})
-                for p in range(1, 4)
-            ] + [
-                _gecko_get(session, f"networks/{GECKO_NETWORK}/dexes/{VENUE}/pools",
-                           {"page": p, "sort": "h24_tx_count_desc"})
-                for p in range(1, 4)
-            ] + [_gecko_get(session, f"networks/{GECKO_NETWORK}/trending_pools")]
+            tasks = (
+                [
+                    _gecko_get(
+                        session, f"networks/{GECKO_NETWORK}/new_pools", {"page": p}
+                    )
+                    for p in range(1, 11)
+                ]
+                + [
+                    _gecko_get(
+                        session,
+                        f"networks/{GECKO_NETWORK}/dexes/{VENUE}/pools",
+                        {"page": p, "sort": "h24_volume_usd_desc"},
+                    )
+                    for p in range(1, 4)
+                ]
+                + [
+                    _gecko_get(
+                        session,
+                        f"networks/{GECKO_NETWORK}/dexes/{VENUE}/pools",
+                        {"page": p, "sort": "h24_tx_count_desc"},
+                    )
+                    for p in range(1, 4)
+                ]
+                + [_gecko_get(session, f"networks/{GECKO_NETWORK}/trending_pools")]
+            )
             results = await asyncio.gather(*tasks, return_exceptions=True)
         for r in results:
             if isinstance(r, Exception):
@@ -126,8 +191,17 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
     excl_pools = set(config.exclude_pools)
     excl_mints = set(config.exclude_mints)
     seen, candidates = set(), []
-    stats = {"not_meteora": 0, "age_old": 0, "age_young": 0, "age_unknown": 0,
-             "vol": 0, "accel": 0, "tvl": 0, "not_sol": 0, "excluded": 0}
+    stats = {
+        "not_meteora": 0,
+        "age_old": 0,
+        "age_young": 0,
+        "age_unknown": 0,
+        "vol": 0,
+        "accel": 0,
+        "tvl": 0,
+        "not_sol": 0,
+        "excluded": 0,
+    }
 
     for p in raw:
         attrs = p.get("attributes", {}) or {}
@@ -166,8 +240,8 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         if not (config.min_tvl_usd <= tvl <= config.max_tvl_usd):
             stats["tvl"] += 1
             continue
-        base_id = (((rel.get("base_token") or {}).get("data") or {}).get("id") or "")
-        quote_id = (((rel.get("quote_token") or {}).get("data") or {}).get("id") or "")
+        base_id = ((rel.get("base_token") or {}).get("data") or {}).get("id") or ""
+        quote_id = ((rel.get("quote_token") or {}).get("data") or {}).get("id") or ""
         base_mint = base_id.split("_", 1)[-1]
         quote_mint = quote_id.split("_", 1)[-1]
         # SOL must be one side; base = the non-SOL side. Counted, not silent: an
@@ -181,49 +255,25 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
             stats["excluded"] += 1
             continue
         seen.add(addr)
-        candidates.append({
-            "pool": addr,
-            "name": attrs.get("name") or "?",
-            "age_h": round(age, 1),
-            "m5": m5,
-            "h1": h1,
-            "tvl": tvl,
-            "turnover_m5": m5 / max(tvl, 1.0),
-            "base_mint": runner_mint,
-            # Mint-mint, never mint-symbol: a trading_pair with a symbol on either
-            # side is accepted by the tool layer and then silently fails on-chain.
-            "mint_pair": f"{runner_mint}-{SOL_MINT}",
-            "price_usd": _num(attrs.get("base_token_price_usd")),
-        })
+        candidates.append(
+            {
+                "pool": addr,
+                "name": attrs.get("name") or "?",
+                "age_h": round(age, 1),
+                "m5": m5,
+                "h1": h1,
+                "tvl": tvl,
+                "turnover_m5": m5 / max(tvl, 1.0),
+                "base_mint": runner_mint,
+                # Mint-mint, never mint-symbol: a trading_pair with a symbol on either
+                # side is accepted by the tool layer and then silently fails on-chain.
+                "mint_pair": f"{runner_mint}-{SOL_MINT}",
+                "price_usd": _num(attrs.get("base_token_price_usd")),
+            }
+        )
 
     if not candidates:
-        pool = len(raw) - stats["not_meteora"]
-        gates = [("ageUnknown", stats["age_unknown"]), ("ageYoung", stats["age_young"]),
-                 ("ageOld", stats["age_old"]), ("m5vol", stats["vol"]),
-                 ("accel", stats["accel"]), ("tvl", stats["tvl"]),
-                 ("notSOL", stats["not_sol"]), ("held", stats["excluded"])]
-        breakdown = " ".join(f"{k}:{v}" for k, v in gates)
-        top, top_n = max(gates, key=lambda kv: kv[1]) if gates else ("none", 0)
-        verdict = (
-            f"The binding gate is **{top}** ({top_n}/{pool} of the Meteora pools seen). "
-            if pool and top_n else
-            "No Meteora pool reached the gates at all — this is a REACH problem, not a gate "
-            "problem: the feeds returned nothing from this venue. Check the scanner's "
-            "sources before touching any threshold. "
-        )
-        return (
-            f"runner_scanner: NO candidates passed the gates. "
-            f"REACH: scanned {len(raw)} pools, of which {pool} were Meteora "
-            f"({stats['not_meteora']} were other venues — structural, the new_pools feed is "
-            f"network-wide, NOT a mis-set gate and never to be reported as one). "
-            f"GATES (out of those {pool} Meteora pools): {breakdown}. "
-            f"{verdict}"
-            f"Runner sleeve should PAUSE — never force entries. "
-            f"If the SAME gate above binds tick after tick, say so explicitly in the journal "
-            f"and name the threshold and its configured value, so the operator can judge "
-            f"whether the market is quiet or the number is wrong. Pausing silently forever "
-            f"is the failure mode; so is blaming the venue filter."
-        )
+        return summarize_no_candidates(raw_count=len(raw), stats=stats)
     candidates.sort(key=lambda c: c["turnover_m5"], reverse=True)
     shortlist = candidates[: config.top_n * 2]
 
@@ -254,23 +304,38 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
 
     rows = []
     for i, c in enumerate(ranked, 1):
-        rows.append({
-            "#": i,
-            "Pair": c["name"],
-            "Age(h)": c["age_h"],
-            "m5Vol": f"${c['m5']:,.0f}",
-            "h1Vol": f"${c['h1']:,.0f}",
-            "TVL": f"${c['tvl']:,.0f}",
-            "m5/TVL": f"{c['turnover_m5']*100:.1f}%",
-            "SizeTier": _tier(c["m5"]),
-            "BinStep": c.get("bin_step"),
-            "Price": f"{c.get('price', c['price_usd']):.6g}",
-            "Pool": c["pool"],
-            "BaseMint": c["base_mint"],
-            "MintPair": c["mint_pair"],
-        })
-    columns = ["#", "Pair", "Age(h)", "m5Vol", "h1Vol", "TVL", "m5/TVL", "SizeTier",
-               "BinStep", "Price", "Pool", "BaseMint", "MintPair"]
+        rows.append(
+            {
+                "#": i,
+                "Pair": c["name"],
+                "Age(h)": c["age_h"],
+                "m5Vol": f"${c['m5']:,.0f}",
+                "h1Vol": f"${c['h1']:,.0f}",
+                "TVL": f"${c['tvl']:,.0f}",
+                "m5/TVL": f"{c['turnover_m5']*100:.1f}%",
+                "SizeTier": _tier(c["m5"]),
+                "BinStep": c.get("bin_step"),
+                "Price": f"{c.get('price', c['price_usd']):.6g}",
+                "Pool": c["pool"],
+                "BaseMint": c["base_mint"],
+                "MintPair": c["mint_pair"],
+            }
+        )
+    columns = [
+        "#",
+        "Pair",
+        "Age(h)",
+        "m5Vol",
+        "h1Vol",
+        "TVL",
+        "m5/TVL",
+        "SizeTier",
+        "BinStep",
+        "Price",
+        "Pool",
+        "BaseMint",
+        "MintPair",
+    ]
 
     summary = (
         f"runner_scanner: {len(ranked)} runner candidate(s) from {len(candidates)} gated "
@@ -283,8 +348,11 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
 
     try:
         from condor.reports import ReportBuilder
+
         builder = ReportBuilder("Runner Scanner — fresh Meteora pools by 5-min volume")
-        builder.source("routine", "runner_scanner").tags(["lp", "runner", "meteora", "m5"])
+        builder.source("routine", "runner_scanner").tags(
+            ["lp", "runner", "meteora", "m5"]
+        )
         builder.kpi("Candidates", str(len(candidates)))
         builder.kpi("Ranked", str(len(ranked)))
         builder.kpi("Top m5", rows[0]["m5Vol"])
@@ -297,10 +365,13 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
 
     try:
         from routines.base import RoutineResult
+
         return RoutineResult(text=summary, table_data=rows, table_columns=columns)
     except Exception:
         lines = [summary, ""]
         for r in rows:
-            lines.append(f"{r['#']}. {r['Pair']} | m5 {r['m5Vol']} | TVL {r['TVL']} | "
-                         f"tier {r['SizeTier']} | pool {r['Pool']} | mint {r['BaseMint']}")
+            lines.append(
+                f"{r['#']}. {r['Pair']} | m5 {r['m5Vol']} | TVL {r['TVL']} | "
+                f"tier {r['SizeTier']} | pool {r['Pool']} | mint {r['BaseMint']}"
+            )
         return "\n".join(lines)

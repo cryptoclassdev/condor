@@ -5,7 +5,8 @@ agent_key: null
 skills:
 - regime_playbook
 default_config:
-  frequency_sec: 300
+  # Safety checks run every minute. Market ranking remains a 5-minute deep task.
+  frequency_sec: 60
   execution_mode: loop
   total_amount_quote: 800
   quote_asset: USDC
@@ -32,7 +33,7 @@ default_config:
       runner_pct: 20
       runner_max_slots: 2
       runner_unit_scale: 1.0
-  runners_enabled: false
+  runners_enabled: true
   runner:
     min_m5_vol_usd: 8000
     full_size_m5: 50000
@@ -97,7 +98,9 @@ Executors** (`manage_executors`, `executor_type="lp_executor"`), never controlle
 
 ## Risk profiles & sleeves (read `risk_profile` + `profiles` from config)
 Three sleeves, allocated by the active profile (guardian 80/10/10 · balanced 60/20/20 ·
-hunter 40/40/20 — core/satellite/runner % of `total_amount_quote`):
+hunter 40/40/20 — core/satellite/runner % of the **risk capital reported by
+`capital_guard`**). `total_amount_quote` is only a configured ceiling; it is never evidence
+that the wallet contains that amount:
 - **SAFE core:** SOL-USDC, this file's CALM/RANGING playbook (curve or bid-ask-below,
   trailing stop, fast re-chase). The ~10% USDC reserve lives inside this sleeve.
 - **MEDIUM satellites:** gated SOL-quoted memecoin bid-ask-below + flip, per this file
@@ -107,13 +110,24 @@ hunter 40/40/20 — core/satellite/runner % of `total_amount_quote`):
   skill** (volume-tier sizing, −6% SL, m5-decay exit, 90-min max hold, on-chain stopgap,
   sleeve budget never exceeded, PAUSE when nothing passes gates). Runner exits/entries do
   NOT count against the satellite hysteresis rules — they have their own faster clock.
+  **If the `runner_playbook` skill is not loaded, do NOT improvise a runner policy and do
+  NOT borrow one from another sleeve.** Use the frontmatter `runner:` block as the complete
+  rule set — `min_m5_vol_usd` as the entry gate, `full_size_m5` as the volume level at which
+  a full-unit probe is justified (scale down proportionally below it), `stop_loss_pct` as a
+  FLOOR not a target, `volume_decay_exit_ratio` of the entry m5 volume as the decay exit,
+  `max_hold_min` as a hard deadline, `max_bins` as the width cap and `reentry_cooldown_min`
+  before touching the same pool again. Anything the block does not specify is a reason to
+  PAUSE the sleeve and say so in the journal, never a reason to infer a value. Observed
+  Aug 20: a satellite was opened carrying a 90-minute deadline silently borrowed from this
+  sleeve — a hard exit rule that is guessed is worse than one that is absent.
 Sleeve budgets are hard walls: a sleeve's losses or ambitions never borrow from another.
 
 ## HARD TICK BUDGET
-~5-minute tick. **≤ 14 tool calls**, of which the first two are always `orphan_guard`
-then `wallet_audit` (step 0) — reconciliation is not optional and is not the thing you drop when the budget is
-tight. One `meteora_pool_scanner` call, one `regime_engine`
-call, at most one `token_safety_check`. Open at most ONE position per tick.
+~1-minute safety tick. **≤ 12 tool calls.** The first four are always `orphan_guard`,
+`wallet_audit`, `capital_guard`, then `lifecycle_guard` (step 0). Reconciliation, capital
+truth and deadlines are not optional. Run pool/runner discovery only every fifth tick
+(~5 minutes), when a sleeve becomes empty, or when `lifecycle_guard` emits
+`REGIME_RECHECK`. Open at most ONE position per tick.
 
 ## Constants
 `connector_name="solana-mainnet-beta"` · `lp_provider="meteora/clmm"` ·
@@ -125,6 +139,11 @@ For SOL-USDC use the mint-pair form
 never the symbol `"SOL-USDC"`. Confirmed 2026-08-19: the symbol form resolves price/pool
 fine via `get_pool_info` but silently fails on-chain for `lp_executor` creates — caused a
 FAILED-create streak before the fix. **No exceptions for the core pair going forward.**
+
+**NETWORK TRUTH:** this strategy is currently configured for Solana mainnet. Treat every
+create, stop and swap as live capital. Never infer devnet/SoftNet from prose or a handoff;
+verify the connector/network shown by the runtime. If it differs from the constant above,
+pause entries and journal the mismatch before doing anything transactional.
 
 **MANDATORY on EVERY `manage_executors(action="create", …)` — swaps AND LP opens:**
 `executor_config` MUST include `"controller_id": "<this session's agent_id>"` (exactly the
@@ -183,13 +202,33 @@ tokens, not quote. So a stopped-out satellite comes back as inventory you cannot
 measured Aug 20, the agent reported "wallet $43.10, unchanged" and declared a funding swap
 blocked for FIVE consecutive ticks while holding **$17.17 of Intismeran — 28% of the book**.
 - **Never declare a sleeve underfunded, or the wallet unchanged, without counting STRANDED.**
-  Journal deployable and stranded as two separate figures, always.
+  Journal liquid quote **before reserves** and stranded as two separate figures. Never call
+  the raw liquid-quote figure "deployable"; gas, rent and sleeve reserves still come out.
 - Stranded inventory is capital one swap away from deployable — but it carries full
   directional risk with **no stop-loss on it**. The longer it sits the more it is an
   unmanaged position than a cash balance. If stranded exceeds roughly half a probe, say so
   in the journal and notify the operator; recovering it is a deliberate swap, never
   automatic.
 - A wallet that reads as empty after a failed portfolio call is UNKNOWN, not empty.
+
+**Then `manage_routines(action="run", name="capital_guard", config={
+"configured_capital_usd": <total_amount_quote>, "daily_loss_limit_pct":
+<risk_limits.daily_loss_limit_pct>, "min_native_reserve":
+<risk_limits.min_wallet_sol_reserve>, "sleeve_percentages": {"core": <active core_pct>,
+"satellite": <active satellite_pct>, "runner": <active runner_pct>}})`**. This is the only
+capital figure allowed for sizing: wallet USD + chain-confirmed active LP USD, capped by the
+configured ceiling. If it says UNKNOWN, open nothing. Its `max next deposit` is after gas and
+the next position's rent; stranded inventory counts toward equity but never toward that
+liquid entry amount.
+
+**Then `manage_routines(action="run", name="lifecycle_guard", config={
+"satellite_max_hold_min": <satellite.max_hold_min>, "runner_max_hold_min":
+<runner.max_hold_min>, "satellite_stop_loss_pct": <stop_loss_pct>,
+"runner_stop_loss_pct": <runner.stop_loss_pct>, "runner_executor_ids": [<journalled runner
+ids>]})`**. Act on `EXIT_NOW` in the same tick. `REGIME_RECHECK` forces `regime_engine` in
+the same tick even if this is not a fifth/deep tick. Pass every runner executor id explicitly
+and journal it at open; without that identity the guard conservatively classifies a non-core
+LP as satellite.
 
 ### 1. Load state — ADOPT every live slot (critical after a restart)
 If `[CORE DATA]` shows no open slots, verify against reality:
@@ -199,8 +238,10 @@ trading_pair. Compute deployed % per bucket vs targets. Only call `get_portfolio
 when sizing an entry or verifying a close.
 
 ### 2. Risk engine first (cannot be overridden)
-- If cumulative session PnL ≤ −`daily_loss_limit_pct`% of `total_amount_quote` → close ALL
-  slots, hold USDC, journal, and only monitor until PnL day resets.
+- If cumulative session PnL ≤ the negative **USD daily-loss budget printed by the current
+  `capital_guard` result** → close ALL slots, hold USDC, journal, and only monitor until PnL
+  day resets. Never multiply the percentage by `total_amount_quote`; the configured ceiling
+  may be 10× larger than the real book.
 - If portfolio value drawdown ≥ `drawdown_killswitch_pct`% → same, permanently this session.
 - If rebalances this hour ≥ `max_rebalances_per_hour` → monitoring only this tick.
 
@@ -212,13 +253,13 @@ Per RUNNING slot read `net_pnl_pct`, `state`, `out_of_range_seconds`. Track each
   current PnL ≤ peak − `trailing_gap_pct`. (CALM slots use fixed `take_profit_pct` instead —
   a calm major won't 5x, take the fee income.)
 - `net_pnl_pct ≤ −stop_loss_pct` (hard floor, all slots);
-- **Hard stop is a FLOOR, not a trigger price.** It is only evaluated once per ~5-minute
-  tick, so a fast token can be well past it before you look: measured Aug 19, a −8% stop was
-  first observed at **−13.3%**. Never assume the loss equals the threshold. Two consequences:
+- **Hard stop is a FLOOR, not a trigger price.** Even at the new ~1-minute safety cadence a
+  fast token can gap through it; under the old 5-minute cadence an −8% floor realised as
+  **−15.77% (~2×)**. Never assume the loss equals the threshold. Two consequences:
   (a) when a HOT position is filling into a falling token, treat proximity to the stop as
   the trigger rather than the breach itself — if it is within ~2% of the floor and the trend
-  is against you, exit on that tick; (b) size on the assumption that the realised stop is
-  roughly 1.5x the configured one.
+  is against you, exit on that tick; (b) size on the assumption that the realised stop can
+  be **2×** the configured one until live evidence proves the minute guard narrows slippage.
 - **Max hold**: read the value from config, per sleeve, and do not carry one sleeve's number
   across to another. A **satellite** uses `satellite.max_hold_min` (currently **120**); a
   **runner** uses `runner.max_hold_min` (currently **90**). Observed Aug 20: a satellite was
@@ -238,7 +279,7 @@ gates above protect positions holding inventory (closing realizes IL). A `side=1
 position that price moved UP and away from holds NO inventory — it earns nothing, risks
 nothing, and repositioning costs only tx fees + a refundable rent round-trip. For such a slot
 (position still ~100% quote, zero/negligible base filled), use a faster rule: if price has
-been above the range's upper bound for ≥ 2 consecutive ticks (~10 min) and the regime is not
+been above the range's upper bound for **≥10 elapsed minutes** and the regime is not
 CHAOTIC, close it and re-place the bid-ask just under the CURRENT price (same width policy).
 Each re-chase also scores volume. Still respect `max_rebalances_per_hour` and journal the
 distinction ("re-chase, unfilled — no IL realized"). If the position HAS partially filled,
@@ -272,12 +313,22 @@ retry, don't blacklist). Journal every exit with reason + realized PnL + fees + 
 a `learning` when new.
 
 ### 4. Rank + classify (only if a bucket is below target)
+- **Scheduling:** this whole discovery section is a deep task, normally every fifth tick.
+  Monitoring/exits still run every minute. A newly empty sleeve or a material fill-change
+  trigger may run its relevant branch immediately.
 - `manage_routines(action="run", name="meteora_pool_scanner",
   strategy_id="meteora_regime_lp.regime_lp_operator", config={"quote_asset":
   <satellite_quote_asset for satellites; "USDC" for core>, "ranking_window": <window>,
   "top_n": 5, "min_tvl_usd": <entry.min_tvl_usd>, "exclude_pools":[held],
   "exclude_mints":[held]})` — satellites scan **SOL-quoted** pools (that's where memecoin
   volume and fee flow live; ranges survive corrections longer), core stays SOL-USDC.
+- If `runners_enabled` and the runner sleeve is below target, run
+  `manage_routines(action="run", name="runner_scanner", config={"quote_asset":"SOL",
+  "min_m5_vol_usd": <runner.min_m5_vol_usd>, "exclude_pools":[held],
+  "exclude_mints":[held]})` on every deep tick. Read its `REACH` and `GATES` breakdown.
+  A zero-candidate result pauses only the runner sleeve for that scan; it does not disable
+  future scans and must not be replaced with an old "venue gate" explanation. Run
+  `regime_engine` with `sleeve="runner"` for passing runner candidates.
 - **PAUSE rule:** if the scanner returns nothing gated, or `regime_engine` classifies ALL top
   candidates CHAOTIC → no entries this tick (dead/berserk market); journal "paused" and hold.
   **But a pause is a claim about the market, not a default.** If the scanner's reject
@@ -294,10 +345,10 @@ a `learning` when new.
   8%/h, runner 10%/h. Omitting it applies the majors threshold to a memecoin, which stamps
   essentially every candidate CHAOTIC. Classify the core pool and the satellite/runner
   candidates in SEPARATE calls — one call carries one sleeve.
-- The engine now auto-steps its candle resolution (1h → 5m → 1m) so pools younger than a day
-  get a real verdict instead of UNKNOWN, and rescales volatility to %/hour either way, so the
-  thresholds compare like-for-like across resolutions. The `Res`/`Bars` columns say which
-  resolution produced the verdict.
+- The engine auto-steps its candle resolution from 1h → 5m and rescales volatility to
+  %/hour, so thresholds compare like-for-like. It intentionally does **not** use 1m candles:
+  a pool with fewer than 24 five-minute bars (<2h) remains UNKNOWN rather than being sized
+  on amplified microstructure noise. The `Res`/`Bars` columns say what produced the verdict.
 
 ### 5. Gate the candidate (satellites only; core SOL-USDC skips token gates)
 Top candidate must pass ALL, else try the next (max 2/tick):
@@ -312,13 +363,16 @@ Top candidate must pass ALL, else try the next (max 2/tick):
   sustained-volume gate) — reject single-spike pools.
 
 ### 6. Open ONE position (regime-shaped)
-Size: core → up to `core.target_pct`% of total; satellite → min(`satellite.max_pct_per_pool`%,
+Size only from the current `capital_guard` risk capital and sleeve ceilings: core → up to
+the active profile's core percentage; satellite → min(`satellite.max_pct_per_pool`%,
 remaining satellite budget); **any HOT-regime entry → one third of what that sleeve would
 otherwise deploy, subject to a FLOOR of the position size at which rent stops dominating**
 (rent is ~0.0574 SOL ≈ $4.70; a probe below ~$20 is mostly rent and tests nothing). If the
 sleeve budget cannot fund that floor, journal that the sleeve is underfunded and hold —
-do NOT silently shrink to a sub-rent position. Never touch the `reserve_pct`% USDC buffer; keep
-`min_wallet_sol_reserve` SOL for rent (~0.057/position) + fees — if short, journal and hold.
+do NOT silently shrink to a sub-rent position. The create amount must also be ≤
+`capital_guard.max next deposit` and the remaining sleeve budget. Never touch the
+`reserve_pct`% USDC buffer; `capital_guard` separately deducts the native gas reserve and
+next-position rent — if any constraint is short, journal and hold.
 
 Shape by regime (from `regime_engine`; full details in the `regime_playbook` skill):
 - CALM (core/majors) → double-sided `side=3`, `extra_params={"strategyType":1}` (Curve),

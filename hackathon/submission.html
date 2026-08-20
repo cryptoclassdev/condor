@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Regime LP Operator — Hackathon Submission</title>
+  <style>
+    :root { color-scheme: dark; --bg:#07110f; --panel:#10201b; --line:#28473d;
+      --text:#eef8f4; --muted:#9ab4aa; --mint:#63f5b2; --amber:#ffc96b; --red:#ff847c; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:radial-gradient(circle at 80% 0,#163629 0,transparent 38%),var(--bg);
+      color:var(--text); font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { width:min(1080px,calc(100% - 36px)); margin:0 auto; padding:64px 0 88px; }
+    .eyebrow { color:var(--mint); letter-spacing:.16em; text-transform:uppercase; font-weight:750; font-size:.78rem; }
+    h1 { font-size:clamp(2.6rem,7vw,5.8rem); line-height:.94; letter-spacing:-.055em; max-width:900px; margin:16px 0 24px; }
+    h2 { font-size:1.55rem; margin:0 0 14px; }
+    p { color:var(--muted); max-width:760px; }
+    .lead { font-size:1.28rem; color:#d7ebe4; }
+    .grid { display:grid; grid-template-columns:repeat(12,1fr); gap:16px; margin-top:34px; }
+    .card { grid-column:span 4; background:linear-gradient(155deg,rgba(25,51,43,.95),rgba(12,29,24,.95));
+      border:1px solid var(--line); border-radius:20px; padding:24px; box-shadow:0 18px 55px rgba(0,0,0,.23); }
+    .wide { grid-column:span 8; } .full { grid-column:1/-1; }
+    .metric { color:var(--mint); font-size:2rem; font-weight:800; letter-spacing:-.04em; }
+    .label { color:var(--muted); font-size:.82rem; text-transform:uppercase; letter-spacing:.09em; }
+    ul { color:#c8ded6; padding-left:20px; } li+li { margin-top:8px; }
+    .warning { color:var(--amber); border-color:#755f2d; }
+    .negative { color:var(--red); }
+    code { color:#baf7dc; }
+    a { color:var(--mint); }
+    footer { margin-top:42px; color:var(--muted); font-size:.9rem; }
+    @media (max-width:780px) { .card,.wide { grid-column:1/-1; } main { padding-top:38px; } }
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Agent Builders Cup · Meteora</div>
+  <h1>Liquidity automation that trusts the chain before it trusts itself.</h1>
+  <p class="lead">Regime LP Operator adapts Meteora DLMM ranges to volatility while verifying
+    positions, capital, deadlines, and performance through independent sources.</p>
+
+  <section class="grid" aria-label="Live evidence">
+    <article class="card"><div class="label">Effective equity</div><div class="metric">$77.30</div><p>Wallet plus chain-confirmed LP value, capped below the configured ceiling.</p></article>
+    <article class="card"><div class="label">Chain ↔ executors</div><div class="metric">2 ↔ 2</div><p>Zero orphans and zero ghosts in the observed live snapshot.</p></article>
+    <article class="card"><div class="label">Phantoms ignored</div><div class="metric">30</div><p>Stale OPEN cache rows safely rejected by Solana authority reads.</p></article>
+
+    <article class="card wide">
+      <h2>Four checks, every minute</h2>
+      <ul>
+        <li><strong>Orphan Guard:</strong> reconcile owned positions and running executors.</li>
+        <li><strong>Wallet Audit:</strong> find liquid quote and stranded token inventory.</li>
+        <li><strong>Capital Guard:</strong> convert real equity into sleeve, loss, gas, and rent budgets.</li>
+        <li><strong>Lifecycle Guard:</strong> enforce UTC deadlines and react to material inventory fills.</li>
+      </ul>
+    </article>
+    <article class="card">
+      <div class="label">Honest lifetime PnL</div><div class="metric negative">-$2.8245</div>
+      <p>Meteora's own API, about -0.405%. No cherry-picked profit claim.</p>
+    </article>
+
+    <article class="card full">
+      <h2>Why this is infrastructure, not a screenshot</h2>
+      <p>Live testing exposed false-failed creates, false-successful stops, zero-proceeds
+        records, partial wallet reads, mixed-quote sizing, deadline drift, and stale cache
+        authority. Each failure became a deterministic guard with regression coverage.</p>
+      <p><strong>Stack:</strong> Condor · Hummingbot API · Gateway · Meteora DLMM · Solana ·
+        Jupiter · GeckoTerminal · Pydantic · pytest</p>
+    </article>
+
+    <article class="card full warning">
+      <h2>Two external steps remain</h2>
+      <p>Add the public repository URL and uploaded demo URL before submitting. Local or
+        fabricated links are intentionally not used.</p>
+    </article>
+  </section>
+  <footer>Evidence snapshot: Solana mainnet, 20 Aug 2026 around 17:10 UTC. Values change with the market.</footer>
+</main>
+</body>
+</html>
+

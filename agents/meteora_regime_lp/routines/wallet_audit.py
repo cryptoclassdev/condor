@@ -21,7 +21,8 @@ price. Nothing needed to be added to the platform — it just was not being read
 
 This routine reports the FULL book and splits it in two:
 
-  DEPLOYABLE   the quote assets the sleeves actually spend (SOL, USDC)
+  LIQUID QUOTE the quote assets the sleeves can spend (SOL, USDC), before gas,
+               rent, and strategy reserves
   STRANDED     everything else — base-token inventory left over from closed LP
                positions. This is capital, not noise, and not missing money. It
                is one swap away from being deployable, and until it is swapped
@@ -34,6 +35,7 @@ import logging
 
 from pydantic import BaseModel, Field
 from telegram.ext import ContextTypes
+
 from config_manager import get_client
 
 logger = logging.getLogger(__name__)
@@ -45,7 +47,7 @@ DEFAULT_QUOTES = ["SOL", "USDC", "USDT", "WSOL"]
 
 
 class Config(BaseModel):
-    """Full wallet inventory: deployable quote vs stranded base tokens."""
+    """Full wallet inventory: liquid quote before reserves vs stranded base tokens."""
 
     quote_tokens: list[str] = Field(
         default=DEFAULT_QUOTES,
@@ -57,7 +59,9 @@ class Config(BaseModel):
     refresh: bool = Field(
         default=True, description="Force a balance refresh rather than trusting cache"
     )
-    account_name: str = Field(default="", description="Restrict to one account (blank = all)")
+    account_name: str = Field(
+        default="", description="Restrict to one account (blank = all)"
+    )
 
 
 def _num(v, default=0.0):
@@ -88,10 +92,12 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         )
 
     quotes = {q.strip().upper() for q in config.quote_tokens}
-    rows, deployable, stranded = [], 0.0, 0.0
+    rows, liquid_quote, stranded = [], 0.0, 0.0
 
     if not isinstance(state, dict):
-        return f"wallet_audit: unexpected portfolio payload type {type(state).__name__}."
+        return (
+            f"wallet_audit: unexpected portfolio payload type {type(state).__name__}."
+        )
 
     for account, account_data in state.items():
         if not isinstance(account_data, dict):
@@ -109,17 +115,19 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
                     continue
                 is_quote = token in quotes
                 if is_quote:
-                    deployable += value
+                    liquid_quote += value
                 else:
                     stranded += value
-                rows.append({
-                    "Token": token,
-                    "Class": "deployable" if is_quote else "STRANDED",
-                    "Units": f"{units:,.6g}",
-                    "Value($)": f"{value:,.2f}",
-                    "Price": f"{_num(b.get('price')):,.8g}",
-                    "Where": f"{account}/{connector}",
-                })
+                rows.append(
+                    {
+                        "Token": token,
+                        "Class": "liquid quote" if is_quote else "STRANDED",
+                        "Units": f"{units:,.6g}",
+                        "Value($)": f"{value:,.2f}",
+                        "Price": f"{_num(b.get('price')):,.8g}",
+                        "Where": f"{account}/{connector}",
+                    }
+                )
 
     if not rows:
         return (
@@ -128,7 +136,7 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         )
 
     rows.sort(key=lambda r: -abs(float(r["Value($)"].replace(",", ""))))
-    total = deployable + stranded
+    total = liquid_quote + stranded
 
     # PARTIAL-READ GUARD. get_state() can SUCCEED and still return an incomplete
     # book — a connector missing from the payload raises nothing, so the wallet
@@ -161,8 +169,10 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         )
 
     parts = [
-        f"wallet_audit: total ${total:,.2f} = ${deployable:,.2f} deployable "
-        f"+ ${stranded:,.2f} stranded across {len(rows)} token(s)."
+        f"wallet_audit: total wallet ${total:,.2f} = ${liquid_quote:,.2f} liquid quote "
+        f"before gas/rent/strategy reserves + ${stranded:,.2f} stranded across "
+        f"{len(rows)} token(s). This is NOT the amount safe to deploy; use capital_guard "
+        f"for the reserve-adjusted entry budget."
     ]
     if stranded >= config.dust_usd:
         pct = 100.0 * stranded / total if total else 0.0
@@ -180,17 +190,20 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
             f"balance. Recovering it is a deliberate swap, never automatic."
         )
     else:
-        parts.append("No stranded inventory — the whole book is deployable quote.")
+        parts.append(
+            "No stranded inventory — the whole wallet is liquid quote before reserves."
+        )
 
     summary = " ".join(parts)
     columns = ["Token", "Class", "Units", "Value($)", "Price", "Where"]
 
     try:
         from condor.reports import ReportBuilder
-        b = ReportBuilder("Wallet Audit — deployable vs stranded")
+
+        b = ReportBuilder("Wallet Audit — liquid quote vs stranded")
         b.source("routine", "wallet_audit").tags(["wallet", "inventory", "meteora"])
         b.kpi("Total", f"${total:,.2f}")
-        b.kpi("Deployable", f"${deployable:,.2f}")
+        b.kpi("Liquid quote (pre-reserve)", f"${liquid_quote:,.2f}")
         b.kpi("Stranded", f"${stranded:,.2f}")
         b.markdown(summary)
         b.table(rows, columns)
@@ -201,6 +214,7 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
 
     try:
         from routines.base import RoutineResult
+
         return RoutineResult(text=summary, table_data=rows, table_columns=columns)
     except Exception:
         lines = [summary, ""]

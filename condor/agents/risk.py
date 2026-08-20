@@ -28,7 +28,19 @@ class RiskLimits:
 
     @classmethod
     def from_dict(cls, d: dict) -> RiskLimits:
-        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+        values = dict(d or {})
+        aliases = {
+            # Several strategy templates pre-date the platform-facing names.
+            # Silently dropping these keys leaves the strategy on permissive
+            # defaults while its prompt claims the safeguards are enforced.
+            "max_open_slots": "max_open_executors",
+            "daily_loss_limit_pct": "max_drawdown_pct",
+            "drawdown_killswitch_pct": "shutdown_drawdown_pct",
+        }
+        for old, new in aliases.items():
+            if new not in values and old in values:
+                values[new] = values[old]
+        return cls(**{k: v for k, v in values.items() if k in cls.__dataclass_fields__})
 
 
 @dataclass

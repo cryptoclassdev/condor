@@ -19,6 +19,14 @@ A Telegram bot for monitoring and trading with Hummingbot via the **Hummingbot A
 - **Configuration** - Manage API servers, exchange credentials, and Gateway through Telegram (`/servers`, `/keys`, `/gateway`)
 - **AI Assistant** - Natural language trading help via **`/agent`** (optional OpenAI or OpenRouter keys, or any custom OpenAI-compatible endpoint like Venice AI; MCP tools when configured)
 
+### Featured agent: Meteora Regime LP Operator
+
+The repository includes a chain-verified Meteora DLMM agent with regime-shaped liquidity,
+three risk sleeves, authoritative capital accounting, exact lifecycle deadlines, and
+bidirectional executor/on-chain reconciliation. See the
+[agent documentation](agents/meteora_regime_lp/README.md) and
+[hackathon submission draft](hackathon/submission.md).
+
 ## What you need
 
 - A **Mac** or **Linux** computer (Windows users: install **WSL2** with Ubuntu, then use Terminal inside Ubuntu).
