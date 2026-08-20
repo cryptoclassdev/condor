@@ -110,8 +110,8 @@ hunter 40/40/20 — core/satellite/runner % of `total_amount_quote`):
 Sleeve budgets are hard walls: a sleeve's losses or ambitions never borrow from another.
 
 ## HARD TICK BUDGET
-~5-minute tick. **≤ 12 tool calls**, of which the FIRST is always `orphan_guard`
-(step 0) — reconciliation is not optional and is not the thing you drop when the budget is
+~5-minute tick. **≤ 13 tool calls**, of which the first two are always `orphan_guard`
+then `wallet_audit` (step 0) — reconciliation is not optional and is not the thing you drop when the budget is
 tight. One `meteora_pool_scanner` call, one `regime_engine`
 call, at most one `token_safety_check`. Open at most ONE position per tick.
 
@@ -177,6 +177,20 @@ If the routine says it could not read the executor list, or that `positions_owne
 for a pool, treat that pool as UNCLASSIFIED, not clean, and do not open anything new there
 this tick.
 
+**Then `manage_routines(action="run", name="wallet_audit")` — same tick, before any sizing
+decision.** Your normal wallet read shows SOL and USDC only, and a DLMM close returns BASE
+tokens, not quote. So a stopped-out satellite comes back as inventory you cannot see:
+measured Aug 20, the agent reported "wallet $43.10, unchanged" and declared a funding swap
+blocked for FIVE consecutive ticks while holding **$17.17 of Intismeran — 28% of the book**.
+- **Never declare a sleeve underfunded, or the wallet unchanged, without counting STRANDED.**
+  Journal deployable and stranded as two separate figures, always.
+- Stranded inventory is capital one swap away from deployable — but it carries full
+  directional risk with **no stop-loss on it**. The longer it sits the more it is an
+  unmanaged position than a cash balance. If stranded exceeds roughly half a probe, say so
+  in the journal and notify the operator; recovering it is a deliberate swap, never
+  automatic.
+- A wallet that reads as empty after a failed portfolio call is UNKNOWN, not empty.
+
 ### 1. Load state — ADOPT every live slot (critical after a restart)
 If `[CORE DATA]` shows no open slots, verify against reality:
 `manage_executors(action="search", executor_types=["lp_executor"], status="RUNNING")` and
@@ -205,9 +219,13 @@ Per RUNNING slot read `net_pnl_pct`, `state`, `out_of_range_seconds`. Track each
   the trigger rather than the breach itself — if it is within ~2% of the floor and the trend
   is against you, exit on that tick; (b) size on the assumption that the realised stop is
   roughly 1.5x the configured one.
-- **Max hold**: satellites exit at `satellite.max_hold_min` from entry, runners at
-  `runner.max_hold_min`. Journal the deadline as a UTC timestamp when you open, or the rule
-  is unenforceable;
+- **Max hold**: read the value from config, per sleeve, and do not carry one sleeve's number
+  across to another. A **satellite** uses `satellite.max_hold_min` (currently **120**); a
+  **runner** uses `runner.max_hold_min` (currently **90**). Observed Aug 20: a satellite was
+  opened with a 90-minute deadline borrowed from the runner sleeve even though
+  `satellite.max_hold_min: 120` was present in the session config — state which key you read
+  and the value it returned when you journal the deadline. Journal it as a UTC timestamp, or
+  the rule is unenforceable;
 - **Volume decay**: pool 1h volume < `volume_decay_exit_ratio` × its at-entry level — fees
   are the product, volume is the input; exit even at flat PnL;
 - OUT_OF_RANGE for ≥ `out_of_range_max_sec` AND price beyond the range edge by more than
