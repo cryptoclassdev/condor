@@ -130,6 +130,36 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
     rows.sort(key=lambda r: -abs(float(r["Value($)"].replace(",", ""))))
     total = deployable + stranded
 
+    # PARTIAL-READ GUARD. get_state() can SUCCEED and still return an incomplete
+    # book — a connector missing from the payload raises nothing, so the wallet
+    # simply reads smaller and every downstream figure is wrong in the dangerous
+    # direction. Observed Aug 20, session 15 tick 1: the read returned $3.04 of
+    # USDC and no SOL at all, fourteen minutes after the same routine read
+    # 0.372 SOL + $3.04. The chain (Phantom) held the SOL the whole time. The
+    # agent then froze for want of capital it already had.
+    #
+    # The invariant that catches it: this is a Solana LP agent. Gas is paid in
+    # SOL and every DLMM position locks ~0.0574 SOL of rent. A book with no
+    # native SOL row AT ALL is therefore not a poor wallet, it is a broken read
+    # — a genuinely SOL-less wallet could not have opened a position or paid for
+    # this very call. Absence of the gas token is evidence about the READ, never
+    # about the balance.
+    native = [r for r in rows if r["Token"] in ("SOL", "WSOL")]
+    where = sorted({r["Where"] for r in rows})
+    if not native:
+        return (
+            f"wallet_audit: ⚠️ PARTIAL READ — the portfolio call SUCCEEDED but returned NO "
+            f"native SOL balance at all, only {', '.join(r['Token'] for r in rows)} "
+            f"(${total:,.2f}) across {len(where)} connector(s): {', '.join(where)}. "
+            f"A Solana LP wallet cannot hold zero SOL: gas is paid in SOL and every open "
+            f"DLMM position locks ~0.0574 SOL of rent. This is a READ FAILURE, not a small "
+            f"wallet. Treat the wallet as UNKNOWN this tick: do NOT report it as "
+            f"under-funded, do NOT declare a sleeve unfundable, do NOT size an entry off "
+            f"the figure above, and do NOT close anything to 'free up' capital. Re-run next "
+            f"tick; if it persists for three consecutive ticks, notify the operator and "
+            f"verify the balance on-chain before acting."
+        )
+
     parts = [
         f"wallet_audit: total ${total:,.2f} = ${deployable:,.2f} deployable "
         f"+ ${stranded:,.2f} stranded across {len(rows)} token(s)."

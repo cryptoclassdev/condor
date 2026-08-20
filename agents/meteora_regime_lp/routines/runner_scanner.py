@@ -197,17 +197,33 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         })
 
     if not candidates:
-        return (
-            f"runner_scanner: NO candidates passed the gates "
-            f"(scanned:{len(raw)} rejects — venue:{stats['not_meteora']} "
-            f"ageOld:{stats['age_old']} ageYoung:{stats['age_young']} "
-            f"ageUnknown:{stats['age_unknown']} m5vol:{stats['vol']} accel:{stats['accel']} "
-            f"tvl:{stats['tvl']} notSOL:{stats['not_sol']} held:{stats['excluded']}). "
-            f"Runner sleeve should PAUSE — never force entries. "
-            f"If one gate dominates the rejects tick after tick, that gate is mis-set, "
-            f"not the market — say so in the journal rather than pausing silently forever."
+        pool = len(raw) - stats["not_meteora"]
+        gates = [("ageUnknown", stats["age_unknown"]), ("ageYoung", stats["age_young"]),
+                 ("ageOld", stats["age_old"]), ("m5vol", stats["vol"]),
+                 ("accel", stats["accel"]), ("tvl", stats["tvl"]),
+                 ("notSOL", stats["not_sol"]), ("held", stats["excluded"])]
+        breakdown = " ".join(f"{k}:{v}" for k, v in gates)
+        top, top_n = max(gates, key=lambda kv: kv[1]) if gates else ("none", 0)
+        verdict = (
+            f"The binding gate is **{top}** ({top_n}/{pool} of the Meteora pools seen). "
+            if pool and top_n else
+            "No Meteora pool reached the gates at all — this is a REACH problem, not a gate "
+            "problem: the feeds returned nothing from this venue. Check the scanner's "
+            "sources before touching any threshold. "
         )
-
+        return (
+            f"runner_scanner: NO candidates passed the gates. "
+            f"REACH: scanned {len(raw)} pools, of which {pool} were Meteora "
+            f"({stats['not_meteora']} were other venues — structural, the new_pools feed is "
+            f"network-wide, NOT a mis-set gate and never to be reported as one). "
+            f"GATES (out of those {pool} Meteora pools): {breakdown}. "
+            f"{verdict}"
+            f"Runner sleeve should PAUSE — never force entries. "
+            f"If the SAME gate above binds tick after tick, say so explicitly in the journal "
+            f"and name the threshold and its configured value, so the operator can judge "
+            f"whether the market is quiet or the number is wrong. Pausing silently forever "
+            f"is the failure mode; so is blaming the venue filter."
+        )
     candidates.sort(key=lambda c: c["turnover_m5"], reverse=True)
     shortlist = candidates[: config.top_n * 2]
 
