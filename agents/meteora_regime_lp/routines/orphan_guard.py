@@ -92,6 +92,11 @@ class Config(BaseModel):
     extra_pools: list[str] = Field(
         default=[], description="Additional pool addresses to check for owned positions"
     )
+    suspect_close_lookback_min: float = Field(
+        default=240.0,
+        description="Scan closes terminated within this many minutes for the two known "
+                    "upstream false-report signatures. 0 disables.",
+    )
 
 
 def _num(v, default=0.0):
@@ -147,6 +152,101 @@ def _fill_state(rec: dict) -> str:
     if pct <= 0.5:
         return "100% quote (unfilled)"
     return f"{pct:.0f}% base"
+
+
+# ── The two upstream close reports that are wrong by construction ────────────
+# Traced to source on Aug 20 (gateway v2.16.0 / hummingbot master):
+#
+#  (a) ZERO-PROCEEDS CLOSE. `closePosition.ts` re-fetches its transaction with a
+#      single un-retried `getTransaction` immediately after confirmation. A few
+#      hundred ms of RPC lag returns null, and the route answers `status: 0`
+#      (PENDING) with a valid signature and NO `data` block. The Hummingbot
+#      connector never reads `status` — it sees a signature, defaults every
+#      missing field to 0, and books a CONFIRMED close with zero withdrawn, zero
+#      fees, zero rent. The close may well have succeeded; the NUMBERS are
+#      fabricated.
+#
+#  (b) NEVER-SENT CLOSE. `get_position_info` returns None on ANY exception (RPC
+#      error, 429, timeout, bad payload). `_close_position` reads None as
+#      "already closed", emits an already-closed event, marks the executor
+#      COMPLETE and NEVER SENDS A CLOSE TRANSACTION. Nothing retries after
+#      COMPLETE. One transient read failure turns a live position into a silent
+#      orphan — this is the false-SUCCESS stop.
+#
+# Neither is visible in the response. Both are visible in the executor record
+# afterwards, which is what this scan reads.
+_PROCEEDS_KEYS = (
+    "base_amount", "quote_amount", "base_fee", "quote_fee",
+    "position_rent_refunded", "base_token_amount_removed",
+    "quote_token_amount_removed", "base_fee_amount_collected",
+    "quote_fee_amount_collected",
+)
+_CLOSE_HASH_KEYS = ("close_tx_hash", "close_signature", "exchange_order_id", "signature")
+_ALREADY_CLOSED_MARKS = ("already closed", "already_closed", "skipping close",
+                         "not found - marking complete", "position may never have been created")
+
+
+def _proceeds_report(rec: dict) -> tuple[str, dict]:
+    """Classify a terminated close: OK / ZERO / NEVER_SENT / SCHEMA_UNKNOWN.
+
+    SCHEMA_UNKNOWN is a first-class answer and is NOT a pass. If none of the
+    proceeds keys are present anywhere in the record, this routine does not know
+    what it is looking at, and saying so beats inventing a verdict — treating an
+    absent field as 0.0 is the exact bug class this scan exists to catch.
+    """
+    flat: dict = {}
+
+    def _walk(o, depth=0):
+        if depth > 6 or not isinstance(o, dict):
+            return
+        for k, v in o.items():
+            if isinstance(v, dict):
+                _walk(v, depth + 1)
+            elif k not in flat:
+                flat[k] = v
+
+    _walk(rec)
+
+    blob = " ".join(str(v) for v in flat.values() if isinstance(v, str)).lower()
+    if any(m in blob for m in _ALREADY_CLOSED_MARKS):
+        return "NEVER_SENT", flat
+
+    present = [k for k in _PROCEEDS_KEYS if flat.get(k) is not None]
+    if not present:
+        return "SCHEMA_UNKNOWN", flat
+    if all(abs(_num(flat.get(k))) == 0.0 for k in present):
+        return "ZERO", flat
+    return "OK", flat
+
+
+async def _recent_terminated(client, lookback_min: float) -> list[dict]:
+    """Executors that stopped inside the lookback window, newest first."""
+    import time as _t
+
+    cutoff = _t.time() - lookback_min * 60.0
+    out, cursor = [], None
+    for _ in range(20):
+        res = await client.executors.search_executors(status="TERMINATED", limit=50, cursor=cursor)
+        page = (res.get("data") or res.get("executors") or []) if isinstance(res, dict) else (res or [])
+        for e in page:
+            if not isinstance(e, dict):
+                continue
+            ts = None
+            for k in ("close_timestamp", "closed_at", "terminated_at", "timestamp", "close_time"):
+                v = e.get(k)
+                if v is not None:
+                    ts = _num(v, 0.0)
+                    break
+            if ts and ts > 1e11:  # milliseconds
+                ts /= 1000.0
+            # No timestamp = keep it. Dropping an unstamped row would silently
+            # narrow the scan, which is the failure mode being guarded against.
+            if ts is None or ts == 0.0 or ts >= cutoff:
+                out.append(e)
+        cursor = res.get("next_cursor") if isinstance(res, dict) else None
+        if not cursor or not page:
+            break
+    return out
 
 
 def _age_min(rec: dict) -> float | None:
@@ -396,6 +496,61 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         f"{len(phantoms)} phantom cache record(s)."
     )
     notes = []
+
+    # 4b. Suspect closes. Every one of these ALREADY reported success to the
+    #     agent; the point is to catch them after the fact, because nothing in
+    #     the response distinguishes them from a clean exit.
+    suspect_zero, suspect_never, suspect_unknown = [], [], []
+    if config.suspect_close_lookback_min > 0:
+        try:
+            for ex in await _recent_terminated(client, config.suspect_close_lookback_min):
+                verdict, flat = _proceeds_report(ex)
+                if verdict == "OK":
+                    continue
+                eid = str(ex.get("id") or ex.get("executor_id") or "?")
+                pair = str(flat.get("trading_pair") or flat.get("pair") or "?")
+                addr = _pick(flat, _ADDR_KEYS)
+                entry = {"executor_id": eid, "pair": pair, "address": addr}
+                if verdict == "ZERO":
+                    suspect_zero.append(entry)
+                elif verdict == "NEVER_SENT":
+                    suspect_never.append(entry)
+                else:
+                    suspect_unknown.append(entry)
+        except Exception as e:
+            notes.append(
+                f"❓ suspect-close scan could not read terminated executors ({e}). Recent "
+                f"closes are UNVERIFIED this tick, not clean."
+            )
+
+    if suspect_never:
+        addrs = ", ".join(e["address"][:8] + "…" for e in suspect_never if e["address"]) or "address not recorded"
+        notes.append(
+            f"🚨 {len(suspect_never)} recent close(s) reported 'already closed / position not "
+            f"found' and were marked COMPLETE — upstream, that path NEVER SENDS A CLOSE "
+            f"TRANSACTION. `get_position_info` returns None on any exception (RPC error, 429, "
+            f"timeout) and the executor reads None as 'already closed'. Nothing retries after "
+            f"COMPLETE. Assume the position is STILL ON-CHAIN until positions_owned says "
+            f"otherwise: {addrs}. Journal as CLOSE ATTEMPTED (UNVERIFIED), never as closed."
+        )
+    if suspect_zero:
+        pairs = ", ".join(f"{e['pair']}({e['executor_id'][:8]}…)" for e in suspect_zero)
+        notes.append(
+            f"🚨 {len(suspect_zero)} recent close(s) booked EVERY proceeds figure as zero — "
+            f"withdrawn, fees and rent all 0. That is the gateway's `status: 0` artifact: it "
+            f"returns a signature with no data when its single un-retried getTransaction "
+            f"misses, and the connector defaults the missing fields to 0 without reading "
+            f"`status`. The close may have succeeded; the NUMBERS ARE FABRICATED. Do not "
+            f"report them as P&L — get the real figures from meteora_truth: {pairs}."
+        )
+    if suspect_unknown:
+        notes.append(
+            f"❓ {len(suspect_unknown)} recent close(s) carried none of the proceeds fields this "
+            f"routine knows, so it cannot tell a clean exit from a zero-proceeds artifact. That "
+            f"is 'not checked', not 'fine' — verify those closes against meteora_truth before "
+            f"quoting anything about them."
+        )
+
     if phantoms:
         notes.append(
             f"⚠️ {len(phantoms)} record(s) appear OPEN in the position cache but the chain "
@@ -489,7 +644,14 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         )
 
     if not (orphans or ghosts or phantoms):
-        notes.append("Chain and executor registry agree. Book is consistent.")
+        if suspect_zero or suspect_never or suspect_unknown:
+            notes.append(
+                "Chain and executor registry agree on OPEN positions — but the recent closes "
+                "flagged above are not clean, and a consistent live book says nothing about "
+                "what the closed ones actually returned."
+            )
+        else:
+            notes.append("Chain and executor registry agree. Book is consistent.")
     elif not (config.close_orphans or config.clear_ghosts or config.close_address):
         notes.append("AUDIT ONLY — arm with close_orphans / clear_ghosts. Journal each finding first.")
 
@@ -505,6 +667,7 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         b.kpi("Executors", str(len(execs)))
         b.kpi("Orphans", str(len(orphans)))
         b.kpi("Ghosts", str(len(ghosts)))
+        b.kpi("Suspect closes", str(len(suspect_zero) + len(suspect_never) + len(suspect_unknown)))
         b.kpi("Phantom cache", str(len(phantoms)))
         b.markdown(summary)
         b.table(rows, columns)

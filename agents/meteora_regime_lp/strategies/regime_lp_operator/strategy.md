@@ -110,7 +110,7 @@ hunter 40/40/20 — core/satellite/runner % of `total_amount_quote`):
 Sleeve budgets are hard walls: a sleeve's losses or ambitions never borrow from another.
 
 ## HARD TICK BUDGET
-~5-minute tick. **≤ 13 tool calls**, of which the first two are always `orphan_guard`
+~5-minute tick. **≤ 14 tool calls**, of which the first two are always `orphan_guard`
 then `wallet_audit` (step 0) — reconciliation is not optional and is not the thing you drop when the budget is
 tight. One `meteora_pool_scanner` call, one `regime_engine`
 call, at most one `token_safety_check`. Open at most ONE position per tick.
@@ -381,6 +381,27 @@ If the open FAILS simulation → re-check price bracketing + bin count, narrow o
 if a swap landed but the open failed, repair (retry with true balance or swap back) — never
 leave acquired base tokens unmanaged.
 
+### 6a. Performance comes from Meteora, not from the executor layer
+`manage_routines(action="run", name="meteora_truth", config={"wallet": "<your wallet>"})`
+— at session start, after EVERY position close, and at least once an hour.
+
+Meteora publishes its own DLMM data API which computes position P&L on the fly from chain
+state and knows nothing about our executors. It is an independent third source and it is the
+sponsor's own accounting. The executor layer has been caught misreporting performance four
+distinct ways (deposit notional as volume; a cache showing 9 open positions against a chain
+holding 1; RUNNING with PnL for a position that did not exist; base-token proceeds invisible
+on close). **The executor layer is for OPERATING positions. It is not evidence of what they
+earned.**
+- Any number you journal, report, or put in a submission as PnL, fees or performance comes
+  from `meteora_truth`. If it disagrees with CORE DATA, `meteora_truth` wins and the
+  disagreement itself is worth journaling.
+- **VS_HODL is the real scoreboard.** Fees are income, not profit. A position that earned
+  fees and still lost to simply holding the deposited basket did not work — measured Aug 19,
+  a satellite earned $0.94 in fees and lost $2.22 against HODL. Judge every closed position
+  on vsHODL, and say so plainly when it lost.
+- A field reported `UNAVAILABLE` is missing, never zero. Never quote it as a figure, and
+  never let a failed API call silently become a fallback to the executor's number.
+
 ### 6b. Read your own metrics correctly
 **The position-size cap does not protect a mixed-quote book.** Each executor's amount is in
 its own quote asset, so a USDC core and a SOL satellite cannot be summed — CORE DATA now
@@ -420,6 +441,25 @@ must carry its verification state, because the tool response is not evidence:
 - `OPEN REJECTED (pre-flight)` — never sent; state the reason (budget floor, gates, reserve).
 - Same three states for stops: `CLOSED (CONFIRMED)` / `CLOSE ATTEMPTED (UNVERIFIED)` /
   `CLOSE REJECTED`.
+
+**Two close reports are LIES BY CONSTRUCTION — never book either as CONFIRMED.** Both were
+traced to upstream code on Aug 20, and neither is detectable from the response alone:
+- **A "closed" report with every proceeds figure at zero** — `base_amount`, `quote_amount`,
+  base/quote fees and rent all `0`. The gateway returns `status: 0` (PENDING) *with* a valid
+  signature and *no* `data` block whenever its post-send `getTransaction` misses (that call
+  is issued once, with no retry, right after confirmation — an RPC lag of a few hundred ms is
+  enough). The Hummingbot connector never reads `status`; it sees a signature, defaults every
+  missing field to `0`, and reports a confirmed close. The position may well be closed —
+  the *numbers* are fabricated. Journal `CLOSE ATTEMPTED (UNVERIFIED)` and get the real
+  figures from `meteora_truth`, never from that response.
+- **An "already closed / position not found — skipping close" report.** The executor
+  pre-checks the position before closing; that read returns `None` on *any* exception —
+  RPC error, 429, timeout, malformed payload — and `None` is treated as "already closed".
+  The executor is then marked COMPLETE and **no close transaction is ever sent**, with no
+  retry after it. This is the mechanism behind the false-SUCCESS stops: a single transient
+  read failure converts a live position into a silent orphan. Treat this report as
+  `CLOSE ATTEMPTED (UNVERIFIED)`, run `orphan_guard` on the NEXT tick without fail, and
+  expect the address to still be there.
 
 Observed twice, and it is why the on-disk journal disagreed with reality: a tick wrote
 "Opening satellite X, $20 probe" as settled fact; the create was pre-flight rejected and no
