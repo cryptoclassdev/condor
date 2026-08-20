@@ -139,7 +139,35 @@ class ExecutorsProvider(BaseProvider):
                 "concluding this session is break-even."
             )
 
-        total_exposure = sum(r.get("amount", 0) for r in running)
+        # Exposure is NOT a single number when the book spans quote assets. Each
+        # executor's `amount` is denominated in ITS OWN quote, so summing a
+        # USDC-quoted core with a SOL-quoted satellite adds 20 to 0.244 and calls
+        # the result "$20.24" — observed live Aug 19. The consequence is not
+        # cosmetic: TickEngine feeds this straight into risk_state.total_exposure,
+        # which is checked against `max_position_size_quote`, so a $20 SOL-quoted
+        # position was being counted as if it were 24 cents. The cap was, in
+        # effect, unenforced for every SOL-quoted sleeve.
+        #
+        # There is no price feed at this layer, so this does not invent a
+        # conversion. It reports the breakdown, and takes the LARGEST single-quote
+        # exposure as the headline figure rather than a meaningless sum — an
+        # under-count on a risk limit is the dangerous direction, and a sum across
+        # incompatible units under-counts every non-headline currency.
+        from condor.fetchers.executors import executor_quote
+
+        by_quote: dict[str, float] = {}
+        for r in running:
+            q = executor_quote(r.get("pair", "")) or "?"
+            by_quote[q] = by_quote.get(q, 0.0) + float(r.get("amount", 0) or 0)
+        total_exposure = max(by_quote.values()) if by_quote else 0.0
+        if len(by_quote) > 1:
+            lines.append(
+                "  ⚠️ MIXED-QUOTE BOOK: "
+                + ", ".join(f"{v:,.4g} {q}" for q, v in sorted(by_quote.items()))
+                + ". These are different units and cannot be added. The risk engine's "
+                "position-size limit is enforced against the largest single-quote figure "
+                "only — treat per-entry sizing as YOUR responsibility, not the cap's."
+            )
 
         return ProviderResult(
             name=self.name,
@@ -152,6 +180,7 @@ class ExecutorsProvider(BaseProvider):
                 "total_volume": perf.volume,
                 "total_fees": perf.fees,
                 "total_exposure": total_exposure,
+                "exposure_by_quote": by_quote,
                 # Includes adopted rows: this is what the risk engine counts
                 # against max_open_executors, and a position you are responsible
                 # for has to be in that number.

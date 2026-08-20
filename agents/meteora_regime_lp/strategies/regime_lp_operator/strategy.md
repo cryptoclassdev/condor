@@ -150,13 +150,21 @@ Act on what it reports:
 - **GHOST** (executor RUNNING, no position on-chain) → cleared automatically by the config
   above. Stopping an executor for a position that does not exist cannot lose money, and
   while the ghost stands the sleeve believes that slot is full and will not re-open.
-- **ORPHAN** (position on-chain, no executor) → it has NO stop-loss and NO max-hold; nothing
-  is managing it. Journal the address immediately. If the SAME address is reported as an
-  orphan again on the NEXT tick, close it: re-run with
-  `config={"close_address": "<address>"}`. Two consecutive reports ≈ 10 minutes, the same
-  protection the age gate gives, and it works when the position's age is unreadable (which
-  it was for the live orphan). Never close on a single sighting — a create that has not
-  finished settling looks identical to an orphan.
+- **UNCLASSIFIED** (`🛑` — the pool an executor references could not be read) → NOT a ghost.
+  Leave it completely alone. "We could not check" is not "it does not exist". If the routine
+  reports the authority read failed for ALL pools it will refuse to classify anything at
+  all; that is correct, and the right response is to hold and retry next tick, never to act
+  on the cached view instead.
+- **ORPHAN** (position on-chain, no executor). Two-stage, and the naming matters:
+  - **First sighting → journal it as `CLOSE UNSETTLED`, and do NOT notify.** A stop that
+    genuinely worked can still show its position on-chain seconds later; measured Aug 19–20,
+    *every* first-sighting "false-failure" (ticks 7, 10, 12) had resolved by the next tick.
+    Calling those orphans overstated the problem 3:1 and paged the operator at 3am for
+    events that fixed themselves.
+  - **Second consecutive sighting of the SAME address → it is a real `ORPHAN`.** Now notify,
+    and close it: re-run with `config={"close_address": "<address>"}`. Genuine ones persist
+    for hours (two required manual Phantom recovery); settlement lag never survives a tick.
+  Never close on a single sighting.
 - **PHANTOM** cache records → report only, NEVER close. The cache reported 9 OPEN positions
   when the chain held 1. Closing those was the trap the first version of this routine
   nearly walked into.
@@ -190,6 +198,13 @@ Per RUNNING slot read `net_pnl_pct`, `state`, `out_of_range_seconds`. Track each
   current PnL ≤ peak − `trailing_gap_pct`. (CALM slots use fixed `take_profit_pct` instead —
   a calm major won't 5x, take the fee income.)
 - `net_pnl_pct ≤ −stop_loss_pct` (hard floor, all slots);
+- **Hard stop is a FLOOR, not a trigger price.** It is only evaluated once per ~5-minute
+  tick, so a fast token can be well past it before you look: measured Aug 19, a −8% stop was
+  first observed at **−13.3%**. Never assume the loss equals the threshold. Two consequences:
+  (a) when a HOT position is filling into a falling token, treat proximity to the stop as
+  the trigger rather than the breach itself — if it is within ~2% of the floor and the trend
+  is against you, exit on that tick; (b) size on the assumption that the realised stop is
+  roughly 1.5x the configured one.
 - **Max hold**: satellites exit at `satellite.max_hold_min` from entry, runners at
   `runner.max_hold_min`. Journal the deadline as a UTC timestamp when you open, or the rule
   is unenforceable;
@@ -349,6 +364,12 @@ if a swap landed but the open failed, repair (retry with true balance or swap ba
 leave acquired base tokens unmanaged.
 
 ### 6b. Read your own metrics correctly
+**The position-size cap does not protect a mixed-quote book.** Each executor's amount is in
+its own quote asset, so a USDC core and a SOL satellite cannot be summed — CORE DATA now
+prints a `⚠️ MIXED-QUOTE BOOK` breakdown and the risk engine enforces its limit against the
+largest single-quote figure only. A $20 SOL-quoted satellite was previously counted as 0.244
+against a $20 limit. **Enforcing the per-entry size is YOUR job, not the cap's:** never send
+a create larger than the session's stated per-entry figure, whatever the risk engine allows.
 `[CORE DATA - executors]` reports LP rows as **`deployed:$X`**, not `V:$X`. That figure is the
 quote you put INTO a range; it is fixed at open and never moves, however much swaps through
 the pool. It is NOT traded volume and must never be reported as volume — in a prior session it

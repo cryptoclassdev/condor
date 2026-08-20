@@ -192,14 +192,18 @@ def _strings_in(obj, out: set, depth: int = 0) -> None:
 
 async def _cached_open(client, cfg: Config) -> list[dict]:
     """Discovery only. This source overcounted 9:1 against the chain on Aug 19."""
+    # No refresh=True, and a small page. This is a CANDIDATE list, never proof, so
+    # paying for a full cache refresh buys nothing — and it was the main cost in a
+    # routine that timed out on 37 of 75 ticks overnight. The authority read is
+    # what decides truth.
     res = await client.gateway_clmm.search_positions(
-        network=cfg.network, connector=cfg.connector, status="OPEN", limit=200, refresh=True,
+        network=cfg.network, connector=cfg.connector, status="OPEN", limit=50,
     )
     rows = (res.get("data") or []) if isinstance(res, dict) else (res or [])
     return [r for r in rows if isinstance(r, dict)]
 
 
-async def _owned_in_pool(client, cfg: Config, pool: str, attempts: int = 3) -> dict[str, dict]:
+async def _owned_in_pool(client, cfg: Config, pool: str, attempts: int = 2) -> dict[str, dict]:
     """Authority: what the wallet actually holds in ``pool``, keyed by address.
 
     Retried with backoff. A single transient 429 here does not degrade gracefully
@@ -211,7 +215,7 @@ async def _owned_in_pool(client, cfg: Config, pool: str, attempts: int = 3) -> d
     last: Exception | None = None
     for i in range(max(1, attempts)):
         if i:
-            await asyncio.sleep(2.0 * i)
+            await asyncio.sleep(1.0 * i)
         try:
             res = await client.gateway_clmm.get_positions_owned(
                 connector=cfg.connector, network=cfg.network, pool_address=pool,
@@ -295,23 +299,54 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         )
 
     # 3. Authority read, per pool.
+    pool_list = sorted(pools)
+    results = await asyncio.gather(
+        *[_owned_in_pool(client, config, p) for p in pool_list], return_exceptions=True
+    )
     confirmed: dict[str, dict] = {}
-    unreadable = []
-    for pool in sorted(pools):
-        try:
-            confirmed.update(await _owned_in_pool(client, config, pool))
-        except Exception as e:
-            unreadable.append(f"{pool[:8]}…")
-            logger.info(f"orphan_guard: positions_owned failed for {pool}: {e}")
+    readable: set = set()
+    unreadable_pools: set = set()
+    for pool, res in zip(pool_list, results):
+        if isinstance(res, Exception):
+            unreadable_pools.add(pool)
+            logger.info(f"orphan_guard: positions_owned failed for {pool}: {res}")
+        else:
+            readable.add(pool)
+            confirmed.update(res)
+    unreadable = [f"{p[:8]}…" for p in sorted(unreadable_pools)]
+
+    # FAIL CLOSED on the authority side too. A GHOST is "executor with no on-chain
+    # position", which is only knowable if the pool that executor references was
+    # actually readable. When every pool errored, `confirmed` is empty and EVERY
+    # executor looks like a ghost — and with clear_ghosts armed the routine stops
+    # them all. That happened live on Aug 20 tick 75: positions_owned failed for
+    # all 5 pools, both healthy executors were classified as ghosts, and a real
+    # position was left unmanaged. The executor-list guard existed; this mirror
+    # guard did not.
+    if not readable:
+        return (
+            f"orphan_guard: the authority read (positions_owned) FAILED for all "
+            f"{len(pool_list)} pool(s). REFUSING to classify orphans or ghosts — with no "
+            f"on-chain truth, every executor looks like a ghost and every cached record "
+            f"looks like an orphan. {len(execs)} RUNNING executor(s) left untouched. Retry "
+            f"next tick; treat every pool as UNCLASSIFIED, not clean, and open nothing new."
+        )
 
     # 4. Classify.
     rows, orphans, ghosts, phantoms = [], [], [], []
 
     tracked_addrs: set = set()
+    unclassified_execs = []
     for eid, strings in ex_strings.items():
         hit = strings & set(confirmed)
         if hit:
             tracked_addrs |= hit
+            continue
+        # No match — but "no match" only means GHOST if we could actually read the
+        # pool(s) this executor points at. If any of them errored, we simply do not
+        # know, and not-knowing must never authorise stopping a live executor.
+        if strings & unreadable_pools:
+            unclassified_execs.append(eid)
         else:
             ghosts.append({"executor_id": eid, "strings": strings})
 
@@ -369,7 +404,13 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
     if unreadable:
         notes.append(
             f"❓ positions_owned failed for pool(s) {', '.join(unreadable)} — anything there is "
-            f"unclassified, not clean."
+            f"unclassified, not clean. Open nothing new in those pools this tick."
+        )
+    if unclassified_execs:
+        notes.append(
+            f"🛑 {len(unclassified_execs)} executor(s) NOT classified because the pool they "
+            f"reference was unreadable. They are NOT ghosts and were not touched — "
+            f"'we could not check' is not 'it does not exist'."
         )
 
     # 5. Act — orphans (close) and ghosts (stop), bounded together.
