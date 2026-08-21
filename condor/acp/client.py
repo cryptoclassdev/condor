@@ -440,6 +440,11 @@ class ACPClient:
             sanitized_servers.append(clean)
         self.mcp_servers = sanitized_servers
         self.permission_callback = permission_callback
+        # Some ACP bridges omit rawInput from session/update tool_call events
+        # even though the same call's permission request contains it. Keep the
+        # normalized arguments by id so host-side audit/capture can enrich the
+        # streamed record after the prompt without relying on model prose.
+        self.permission_tool_inputs: dict[str, Any] = {}
         self.extra_env = lifted_env
         # Text APPENDED to the host's own system prompt (see start()). The only
         # true system-level channel an ACP session has — everything else Condor
@@ -923,8 +928,25 @@ class ACPClient:
         # refusal.
         if self.permission_callback:
             tool_call = normalize_tool_call(toolCall or {})
+            tool_call_id = str(
+                tool_call.get("toolCallId") or tool_call.get("tool_call_id") or ""
+            )
             try:
-                return await self.permission_callback(tool_call, options)
+                decision = await self.permission_callback(tool_call, options)
+                outcome = decision.get("outcome", {}) if isinstance(decision, dict) else {}
+                title = str(tool_call.get("tool") or tool_call.get("title") or "")
+                # Only the execution action needed by deterministic outcome
+                # capture is enriched. Do not broaden disk persistence for
+                # permission-only inputs such as server credentials.
+                if (
+                    tool_call_id
+                    and title.lower().endswith("manage_executors")
+                    and tool_call.get("input") is not None
+                    and isinstance(outcome, dict)
+                    and outcome.get("outcome") == "selected"
+                ):
+                    self.permission_tool_inputs[tool_call_id] = tool_call["input"]
+                return decision
             except Exception:
                 log.exception(
                     "Permission callback failed for %s — denying",

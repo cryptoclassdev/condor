@@ -342,6 +342,19 @@ def test_outcome_routine_checks_persistent_gate_before_an_entry(tmp_path, monkey
     assert "ENTRY_BLOCKED" in blocked
 
 
+def test_entry_check_schema_does_not_require_record_only_fields(tmp_path, monkeypatch):
+    monkeypatch.setattr(outcome_learner, "STORE_ROOT", tmp_path)
+
+    config = outcome_learner.Config(
+        mode="entry_check",
+        pool_address="pool-minimal-entry-check",
+        observed_tick=1,
+    )
+
+    assert config.action == "create"
+    assert config.sleeve == "satellite"
+
+
 def test_replayed_terminal_observation_is_idempotent():
     learner = OutcomeLearner()
     attempt = PositionAttempt(

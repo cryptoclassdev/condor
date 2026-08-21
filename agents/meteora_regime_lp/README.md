@@ -29,11 +29,10 @@ Every minute the strategy runs:
 5. `competition_guard` — during finals only, block late entries and start deterministic
    wind-down before the organizer closes every remaining position.
 
-The strategy requires every create to be passed through `outcome_learner` twice: first as
-same-tick pending evidence, then after the next chain + wallet reconciliation. The pure routine
-and append-only event format are implemented and tested; deterministic host-level capture is
-still a pre-freeze integration item, so live correctness never depends on the model remembering
-to invoke it. Repeated failures may tune only bounded execution mechanics
+Condor's host observes every executor create/stop deterministically, stores it as pending, and
+reconciles it on a later tick against executor detail, Solana-owned positions, and wallet
+movement. The append-only event ledger survives restarts, and unresolved attempts block the
+same pool before the model can retry. Repeated failures may tune only bounded execution mechanics
 (funding haircut, range-width scale, and RPC backoff); portfolio risk controls are outside
 the learner's interface and cannot be relaxed by it. Confirmed closes are attributed by
 exit reason; a hard-stop adds a 30-tick pool cooldown, and every later entry must pass the
@@ -111,6 +110,12 @@ failure, boot reconciliation marks the interrupted session, creates a fresh sess
 repeats the adoption checks. A deliberate `make stop` is different: it is treated as an
 operator-requested stop and does not auto-relaunch the strategy.
 
+Do not confuse a Condor restart with a Hummingbot API restart. Condor can safely adopt the
+API's still-RUNNING executors. Recreating the API container can instead mark them
+`SYSTEM_CLEANUP` while leaving their LP positions open on-chain. Prove **zero RUNNING
+executors** before an API restart; otherwise stop Condor, reconcile and close each exact
+on-chain position first.
+
 ### 5. Verify the first tick
 
 Before leaving the operator unattended, confirm the session journal reports:
@@ -163,6 +168,7 @@ uv run pytest \
   tests/test_meteora_lifecycle_guard.py \
   tests/test_meteora_runner_scanner.py \
   tests/test_meteora_outcome_learning.py \
+  tests/test_meteora_host_outcomes.py \
   tests/test_meteora_quick_in_out.py \
   tests/test_meteora_hedge_plan.py \
   tests/test_risk_gate.py

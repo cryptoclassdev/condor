@@ -16,20 +16,21 @@
   <section class="grid">
     <article class="card"><div class="eyebrow">Overall grade</div><div class="grade">B+</div><p>No open critical code finding after remediation.</p></article>
     <article class="card"><div class="eyebrow">Live snapshot</div><div class="grade">2 ↔ 2</div><p>Two chain positions, two executors, zero orphan/ghost classifications at the recorded snapshot.</p></article>
-    <article class="card"><div class="eyebrow">Observed equity</div><div class="grade">$128.36</div><p>Point-in-time mainnet evidence, not a return guarantee.</p></article>
+    <article class="card"><div class="eyebrow">Observed equity</div><div class="grade">$131.07</div><p>Session 29 point-in-time mainnet evidence, not a return guarantee.</p></article>
     <article class="card wide"><h2>What was fixed</h2><ul>
       <li>ACP bridge credentials no longer travel in process arguments.</li><li>High-severity frontend dependency advisories reduced to zero.</li>
-      <li>Expired browser sessions stop reconnecting instead of producing endless WebSocket 403s.</li><li>Telegram alert polling has a single owner.</li>
+      <li>Expired browser sessions stop reconnecting instead of producing endless WebSocket 403s.</li><li>Telegram polling is disabled in the second local service; BotFather reissue remains required to evict an unknown remote poller.</li>
       <li>A 12-call operational budget bounds each reasoning tick while exits and journaling remain available.</li><li>False-success closes with live chain positions become quarantined reconciliation events.</li>
+      <li>A live sparse-ACP create was captured host-side and classified only on the following chain/wallet authority read.</li><li>The production entry bundle is split; the main chunk is 576 KB instead of 1.41 MB.</li>
     </ul></article>
     <article class="card"><h2>Audit grades</h2><table><tr><td>Correctness</td><td class="ok">A−</td></tr><tr><td>Error handling</td><td class="ok">A−</td></tr><tr><td>Testing</td><td class="ok">A−</td></tr><tr><td>Security</td><td class="warn">B+</td></tr><tr><td>Organization</td><td class="warn">B+</td></tr><tr><td>Documentation</td><td class="ok">A−</td></tr></table></article>
     <article class="card full"><h2>Capital-increase gates</h2><table><thead><tr><th>Gate</th><th>Status</th><th>Reason</th></tr></thead><tbody>
       <tr><td>Automated tests and production build</td><td class="ok">Verified</td><td>Regression, dependency and frontend checks</td></tr>
       <tr><td>Open-position restart recovery</td><td class="ok">Verified</td><td>Session 27 adopted both executors after a forced crash, with no duplicate entry</td></tr>
-      <tr><td>Credential rotation</td><td class="warn">Required before high capital</td><td>Old ACP launch arguments exposed local secrets to the process table</td></tr>
-      <tr><td>Outcome learning</td><td class="warn">Bounded experiment</td><td>Classifier is tested; deterministic capture is not engine-wired yet</td></tr>
+      <tr><td>Credential rotation</td><td class="warn">API done; Telegram reissue pending</td><td>Hummingbot API password rotated with 0600 files; BotFather must revoke the conflicted bot token</td></tr>
+      <tr><td>Outcome learning</td><td class="ok">Deterministic and bounded</td><td>Host capture waits for later executor, chain, and wallet authority before classification</td></tr>
       <tr><td>Demo and public clean clone</td><td class="warn">Submission task</td><td>Video is owner-recorded; branch must pass from a fresh clone</td></tr>
     </tbody></table></article>
-    <article class="card full"><h2>Recommendation</h2><p>Keep Guardian/Balanced/Hunter selectable, with experimental hedge and quick-in/out features disabled. After restart adoption, credential rotation, and a 24–48 hour fault-free soak, increase funds in measured steps rather than jumping directly to the finals ceiling. The system can seek gains, but neither the audit nor the strategy can guarantee them.</p><p><a href="submission.html">Submission preview</a> · <a href="https://github.com/cryptoclassdev/condor/tree/meteora-cup">Public repository</a></p></article>
+    <article class="card full"><h2>Recommendation</h2><p>Keep Guardian/Balanced/Hunter selectable, with experimental hedge and quick-in/out features disabled. After the Telegram token reissue and a 24–48 hour fault-free soak, increase funds in measured steps rather than jumping directly to the finals ceiling. The system can seek gains, but neither the audit nor the strategy can guarantee them.</p><p><a href="submission.html">Submission preview</a> · <a href="https://github.com/cryptoclassdev/condor/tree/meteora-cup">Public repository</a></p></article>
   </section>
 </main></body></html>

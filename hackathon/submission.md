@@ -44,15 +44,15 @@ inventory changes. Every create and close is verified in both directions. A repo
 without a chain or wallet delta remains unverified; a reported failure with a live position is
 adopted instead of duplicated.
 
-A bounded outcome-learning routine can turn reconciled facts into structured evidence instead
-of relying on prose memory. It distinguishes same-tick indexing lag, false success,
+A deterministic host adapter turns reconciled facts into structured evidence instead of
+relying on prose memory or model adherence. It observes every executor create/stop, waits for
+a later chain and wallet authority read, and distinguishes same-tick indexing lag, false success,
 false-failure orphans, insufficient exact-token balance, invalid ranges, RPC failures and
 strategy stop-losses. Repeated proof may adjust only bounded execution mechanics—funding
 haircut, range width and RPC backoff—while hard risk controls remain outside its interface.
-Stop-loss pools receive an expiring cooldown before fresh discovery can admit them again. Its
-pure policy and durable ledger are tested; deterministic host-level capture of every action is
-a pre-freeze integration item, so the submission does not claim self-modification or guaranteed
-automatic improvement.
+Stop-loss pools receive an expiring cooldown before fresh discovery can admit them again. The
+policy, durable pending queue, restart replay, and host capture are tested. It remains bounded
+adaptation—not self-modifying code or guaranteed automatic improvement.
 
 The agent changes DLMM distribution and width from measured volatility regime: concentrated
 Curve liquidity in calm conditions, quote-side Bid-Ask liquidity below price in ranging or

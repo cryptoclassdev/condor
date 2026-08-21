@@ -591,12 +591,13 @@ reported:
    "Where did the money go" is answered before any retry — a funding shortage after a FAILED
    create is the false-failure signature, not a reason to swap more funds into the attempt.
 
-**Record the reconciled outcome with `outcome_learner`.** Give every create a stable
-`attempt_id`. A same-tick call must use `confirmation_age_ticks=0`; `PENDING_CONFIRMATION`
-means wait and never retry. On the next tick, after orphan_guard + wallet_audit, call it again
-with the same attempt ID, `confirmation_age_ticks>=1`, the executor status, authoritative
-`chain_position_found`, actual quote `wallet_delta_usd`, and any exact error text. Obey its
-`next` result before another create:
+**Outcome capture is deterministic at the host layer.** Condor observes every completed
+`manage_executors(create|stop)` call, stores it as pending, and reconciles it on a later tick
+against executor detail, Solana-owned positions, and wallet movement. Do not spend tool calls
+recording the outcome manually and do not invent an `attempt_id`; the host supplies a stable
+one and persists it across restarts. Before every entry, `outcome_learner(mode="entry_check")`
+must still return `ENTRY_ALLOWED`; an unresolved host attempt returns `ENTRY_BLOCKED` until
+the later authority read completes. Obey the stored result before another create:
 
 - `ADOPT_OR_RECOVER` / `CLEAN_GHOST_THEN_RETRY` / `HOLD_AND_RECONCILE` authorize no retry;
 - `RETRY_NEXT_DEEP_TICK` and `REBUILD_RANGE_NEXT_DEEP_TICK` authorize at most one retry,
@@ -609,9 +610,9 @@ The learner may change only those three bounded execution parameters and require
 evidence before doing so. It cannot change token gates, reserves, stop/drawdown limits,
 sleeve ceilings, maximum slots, network, or transaction authority. Its append-only ledger
 and current state live under the agent's ignored `store/outcome_learning/` runtime directory.
-After every confirmed close, record the close with its exact `exit_reason`, PnL, vs-HODL,
-and tick. A hard-stop outcome places that pool on a 30-tick cooldown and forces fresh
-discovery/regime evidence before it can be entered again.
+Confirmed closes are captured through the same host path. A hard-stop outcome places that
+pool on a 30-tick cooldown and forces fresh discovery/regime evidence before it can be
+entered again.
 
 If the open FAILS simulation → re-check price bracketing + bin count, narrow once, retry once;
 if a swap landed but the open failed, repair (retry with true balance or swap back) — never

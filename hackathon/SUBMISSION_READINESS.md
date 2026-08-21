@@ -2,8 +2,8 @@
 
 Status: **submission package approximately 90% ready**. The public fork exists; code, strategy,
 tests, judge guide, application copy, HTML preview and recording plan are prepared. The remaining
-blockers are the recorded demo, a clean-clone proof from the published branch, and final live
-evidence. They must not be fabricated.
+blockers are the recorded demo, Telegram bot-token reissue, and final live soak evidence. They
+must not be fabricated.
 
 ## Botcamp rule coverage
 
@@ -40,6 +40,11 @@ deposit-notional or whole-pool-volume claims.
 - Cache rows from unreadable pools remain unclassified instead of being called phantoms.
 - SOL hedge readiness and the hunter micro quick-in/out experiment are disabled by default.
 - The demo, submission copy and judge installation path avoid unsupported profitability claims.
+- The Hummingbot API credential was rotated with owner-only local files; the frontend production
+  bundle is split into stable React, chart, editor, markdown, crypto, and vendor groups.
+- Live session 29 proved the host adapter against the real sparse ACP stream: it persisted the
+  XST/SOL create with an exact executor and pre-action wallet baseline at tick 1, then tick 2
+  classified it `CONFIRMED_SUCCESS` only after chain ownership and a −$31.02 wallet delta agreed.
 
 ## External morning tasks
 
@@ -67,13 +72,18 @@ These improve finals performance but are not reasons to weaken current safety ga
 ## Current live caveat
 
 Recent live runs exposed systemic false-success close/create reporting and fast-moving core
-ranges that can cross before confirmation. The agent recovered the observed orphan and now
-holds rather than retrying indefinitely. A forced process crash with two positions open marked
+ranges that can cross before confirmation. A forced process crash with two positions open marked
 session 26 interrupted, automatically started session 27, adopted both executors, reconciled
-zero orphans/ghosts, and opened no duplicate. Larger-capital use should still follow a measured
-soak and credential rotation rather than a single jump.
+zero orphans/ghosts, and opened no duplicate. During the later Hummingbot API credential rotation,
+the API container correctly invalidated the old password but marked its two live executors
+  `SYSTEM_CLEANUP` without closing their on-chain positions. The operator detected both exact
+  orphans, stopped Condor, closed and chain-verified them one at a time, confirmed a liquid-only
+  SOL/USDC wallet, and restarted as session 28. Two later Condor-only crash drills left the API
+  untouched: session 29 adopted the core, then session 30 adopted both current executors without
+  creating a duplicate. This is now explicit operational evidence that an API restart must occur
+  only with zero RUNNING executors. Larger-capital use should still follow a measured fault-free
+  soak rather than a single jump.
 
-The bounded outcome learner and append-only evidence format are implemented and tested, but
-automatic host-level capture after every action is not yet wired into the live engine. The
-strategy invokes the routine after reconciliation; this is useful evidence, not permission to
-claim that every live action is already learned automatically.
+The bounded outcome learner is wired into the host lifecycle: executor create/stop calls enter
+a durable pending queue and are classified only after a later executor, chain, and wallet read.
+The learner remains unable to relax any portfolio risk or token-safety control.

@@ -121,6 +121,7 @@ class TickEngine:
     _active_client: "ACPClient | PydanticAIClient | None" = field(
         default=None, init=False, repr=False
     )
+    _outcome_hook: Any = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         # The journal/sessions/learnings hang off the *strategy* dir (one level
@@ -186,6 +187,13 @@ class TickEngine:
             declared=declared_names(self.config, namespace),
             enforced=bool(self.config["bot_name"]),
         )
+
+        # Optional agent-local deterministic evidence adapter. It observes
+        # execution outcomes outside the model loop and therefore survives
+        # prompt omissions and restarts.
+        from .host_outcomes import load as load_outcome_hook
+
+        self._outcome_hook = load_outcome_hook(self.agent.slug)
 
         # The canvas and its report exist only for loop sessions: an experiment
         # has no session dir to write a canvas to and no history worth charting.
@@ -435,6 +443,27 @@ class TickEngine:
         # live bot must be taken over rather than orphaned and redeployed.
         await self._adopt_running_bots(client)
 
+        if not self.is_experiment:
+            from .host_outcomes import (
+                prepare as prepare_host_outcomes,
+                reconcile as reconcile_host_outcomes,
+            )
+
+            await reconcile_host_outcomes(
+                self._outcome_hook,
+                client=client,
+                agent_id=self.agent_id,
+                tick=self.journal.tick_count + 1,
+            )
+            outcome_evidence_before = await prepare_host_outcomes(
+                self._outcome_hook,
+                client=client,
+                agent_id=self.agent_id,
+                tick=self.journal.tick_count + 1,
+            )
+        else:
+            outcome_evidence_before = {}
+
         # 2. Run core data providers (executors only -- agent uses MCP for market data)
         skill_results = await self.provider_registry.run_core_providers(
             client,
@@ -602,8 +631,29 @@ class TickEngine:
             await acp_client.stop()
             self._active_client = None
 
+        # Claude's ACP bridge currently provides complete call arguments on the
+        # permission request but may omit them from the session-update event.
+        # Enrich the folded record deterministically before host capture.
+        for call_id, call_input in getattr(
+            acp_client, "permission_tool_inputs", {}
+        ).items():
+            if call_id in tool_call_map and not tool_call_map[call_id].get("input"):
+                tool_call_map[call_id]["input"] = call_input
+
         response_text = "".join(response_chunks)
         tick_duration = time.time() - self._last_tick_at
+
+        if not self.is_experiment:
+            from .host_outcomes import capture as capture_host_outcomes
+
+            await capture_host_outcomes(
+                self._outcome_hook,
+                client=client,
+                agent_id=self.agent_id,
+                tick=self.journal.tick_count + 1,
+                tool_calls=tool_calls,
+                evidence_before=outcome_evidence_before,
+            )
 
         from datetime import datetime, timezone
 

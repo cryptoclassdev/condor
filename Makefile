@@ -124,9 +124,12 @@ verify-meteora:
 		tests/test_meteora_orphan_guard.py \
 		tests/test_meteora_runner_scanner.py \
 		tests/test_meteora_outcome_learning.py \
+		tests/test_meteora_host_outcomes.py \
 		tests/test_meteora_quick_in_out.py \
 		tests/test_meteora_hedge_plan.py \
 		tests/test_meteora_submission_package.py \
+		tests/test_rotate_hummingbot_credentials.py \
+		tests/test_install_telegram_token.py \
 		tests/test_risk_gate.py
 	$(call find_node,cd frontend && npm test && npm run build)
 

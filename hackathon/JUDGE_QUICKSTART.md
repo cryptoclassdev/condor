@@ -29,6 +29,8 @@ The important files are:
 - `agents/meteora_regime_lp/strategies/regime_lp_operator/strategy.md` — complete unattended
   strategy and risk policy;
 - `agents/meteora_regime_lp/routines/` — deterministic measurements and guards;
+- `agents/meteora_regime_lp/host_outcomes.py` — deterministic pre/post executor evidence
+  adapter and durable pending reconciliation;
 - `hackathon/submission.md` — copy-ready application;
 - `hackathon/demo-script.md` — sub-three-minute recording plan.
 

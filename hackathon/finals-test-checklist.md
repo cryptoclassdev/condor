@@ -39,6 +39,9 @@ For `guardian`, `balanced`, and `hunter`:
 - Confirm the old session becomes interrupted and exactly one replacement session starts.
 - Confirm the first replacement tick adopts the existing LP and does not create a duplicate.
 - Confirm a deliberate stop remains stopped and does not auto-relaunch.
+- Never recreate/restart Hummingbot API while an executor is RUNNING. The current API marks
+  those executors `SYSTEM_CLEANUP` but can leave their LP positions open on-chain. If an API
+  restart is unavoidable, first close and chain-verify every LP, then restart and reconcile.
 
 ## 5. Runner scanner
 
@@ -110,3 +113,14 @@ Increase capital only after the preceding checks pass on the same commit:
   current reconciliation, and honest Meteora performance.
 - Verify the public clone installs without files ignored by Git.
 - Submit early for organizer feedback, but treat **August 31, 2026** as the code freeze.
+
+## 11. Credential cutover
+
+- Confirm the Hummingbot API has zero RUNNING executors before rotating or restarting it.
+- Rotate the API password with `uv run python scripts/rotate_hummingbot_api_password.py`; never
+  pass a secret on the command line. Recreate the API only after the zero-executor proof.
+- In BotFather, revoke/reissue the Telegram bot token. Install it from a private terminal with
+  `uv run python scripts/install_telegram_token.py`; input is hidden and the ignored `.env`
+  remains mode 0600.
+- Restart Condor once and verify API authentication, exactly one Telegram poll owner, clean
+  chain reconciliation, and a completed supervision tick before increasing capital.

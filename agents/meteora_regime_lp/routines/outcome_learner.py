@@ -9,7 +9,7 @@ import importlib
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from telegram.ext import ContextTypes
 
 from agents.meteora_regime_lp import outcome_learning as outcome_policy
@@ -23,10 +23,10 @@ outcome_policy = importlib.reload(outcome_policy)
 
 class Config(BaseModel):
     mode: Literal["record", "entry_check"] = "record"
-    attempt_id: str = Field(min_length=1)
-    action: Literal["create", "close", "monitor"]
+    attempt_id: str = ""
+    action: Literal["create", "close", "monitor"] = "create"
     pool_address: str = Field(min_length=1)
-    sleeve: Literal["core", "satellite", "runner", "runner_micro"]
+    sleeve: Literal["core", "satellite", "runner", "runner_micro"] = "satellite"
     executor_status: str = "UNKNOWN"
     chain_position_found: bool | None = None
     wallet_delta_usd: float | None = None
@@ -36,6 +36,12 @@ class Config(BaseModel):
     pnl_pct: float | None = None
     vs_hodl_pct: float | None = None
     observed_tick: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def record_requires_attempt_id(self):
+        if self.mode == "record" and not self.attempt_id.strip():
+            raise ValueError("attempt_id is required in record mode")
+        return self
 
 
 async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -50,6 +56,13 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         )
 
     if config.mode == "entry_check":
+        from agents.meteora_regime_lp.host_outcomes import pending_pool
+
+        if pending_pool(config.pool_address, STORE_ROOT / "pending.json"):
+            return (
+                "outcome_learner: ENTRY_BLOCKED — a host-observed create/close for "
+                "this pool is pending next-tick chain and wallet reconciliation."
+            )
         permission = outcome_policy.OutcomeLearner().entry_permission(
             config.pool_address, config.observed_tick, prior
         )

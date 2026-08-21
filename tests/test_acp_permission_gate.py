@@ -94,6 +94,44 @@ def test_acp_rawinput_is_translated_to_input():
     assert is_dangerous_tool_call(normalized)
 
 
+def test_permission_request_retains_arguments_for_host_capture():
+    async def run():
+        client = ACPClient(command="true", permission_callback=lambda *_: None)
+
+        async def allow(*_):
+            return {"outcome": {"outcome": "selected", "optionId": "allow"}}
+
+        client.permission_callback = allow
+        await client._on_request_permission(
+            toolCall=_acp_request("manage_executors", {"action": "create"}),
+            options=OPTIONS,
+        )
+        return client.permission_tool_inputs
+
+    assert asyncio.run(run()) == {"1": {"action": "create"}}
+
+
+def test_permission_request_does_not_retain_credentials_or_rejected_actions():
+    async def run():
+        async def reject(*_):
+            return {"outcome": {"outcome": "cancelled"}}
+
+        client = ACPClient(command="true", permission_callback=reject)
+        await client._on_request_permission(
+            toolCall=_acp_request(
+                "configure_server", {"password": "must-not-be-retained"}
+            ),
+            options=OPTIONS,
+        )
+        await client._on_request_permission(
+            toolCall=_acp_request("manage_executors", {"action": "create"}),
+            options=OPTIONS,
+        )
+        return client.permission_tool_inputs
+
+    assert asyncio.run(run()) == {}
+
+
 def test_acp_deploy_asks_a_human_instead_of_auto_approving():
     """The regression: this used to return an allow outcome with nothing rendered."""
     channel = _CapturingChannel(answer=False)
