@@ -14,7 +14,7 @@ evidence. They must not be fabricated.
 | `strategy.md` | Ready | Full unattended strategy, profiles, limits and recovery behavior |
 | Unattended 48-hour operation | Restart and open-position adoption proven; extended soak remains | `restart_on_boot`, `competition_guard`, session 26 → 27 recovery |
 | Demo video | Script ready; recording/upload pending | `hackathon/demo-script.md` |
-| Public code | Public fork ready; branch publication pending final verification | `https://github.com/cryptoclassdev/condor` |
+| Public code | Published and clean-clone verified | `https://github.com/cryptoclassdev/condor/tree/meteora-cup` |
 | Code freeze safety | Checklist ready | `hackathon/finals-test-checklist.md` |
 
 Botcamp's scoring is **rank-normalized** within **40% gross-filled-notional volume, 40% P&L
@@ -43,11 +43,9 @@ deposit-notional or whole-pool-volume claims.
 
 ## External morning tasks
 
-1. Publish the verified `meteora-cup` branch to the public fork.
-2. Run the clean-clone install and `make verify-meteora` from that public branch.
-3. Record and upload the final demo; replace `<DEMO_VIDEO_URL>`.
-4. Refresh the evidence snapshot from Meteora and Condor immediately before recording.
-5. Paste the final fields into Botcamp, rank Meteora first, review, and submit before August 31.
+1. Record and upload the final demo; replace `<DEMO_VIDEO_URL>`.
+2. Refresh the evidence snapshot from Meteora and Condor immediately before recording.
+3. Paste the final fields into Botcamp, rank Meteora first, review, and submit before August 31.
 
 ## Remaining product work after the 90% handoff
 

@@ -35,7 +35,6 @@ review:
     - stale browser authentication no longer reconnects forever
   residual_work:
     - upload final demo video
-    - clean-clone verification from published branch
     - deterministic host capture for every reconciled outcome
     - rotate previously process-visible local credentials before high-capital use
     - split the large frontend bundle

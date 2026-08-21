@@ -44,7 +44,7 @@ install: setup
 	@bash -c ' \
 		export NVM_DIR="$$HOME/.nvm"; \
 		[ -s "$$NVM_DIR/nvm.sh" ] && . "$$NVM_DIR/nvm.sh"; \
-		cd frontend && npm install \
+		cd frontend && npm install --include=dev \
 	'
 	@$(MAKE) setup-chrome
 
@@ -57,7 +57,7 @@ build-frontend:
 	@bash -c ' \
 		export NVM_DIR="$$HOME/.nvm"; \
 		[ -s "$$NVM_DIR/nvm.sh" ] && . "$$NVM_DIR/nvm.sh"; \
-		cd frontend && [ -d node_modules ] || npm ci; \
+		cd frontend && [ -d node_modules ] || npm ci --include=dev; \
 		npm run build \
 	'
 
