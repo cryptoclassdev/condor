@@ -3,77 +3,127 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Regime LP Operator — Hackathon Submission</title>
+  <meta name="description" content="Judge preview for Regime LP Operator, a chain-verified Meteora liquidity agent.">
+  <title>Regime LP Operator — Agent Builders Cup</title>
   <style>
-    :root { color-scheme: dark; --bg:#07110f; --panel:#10201b; --line:#28473d;
-      --text:#eef8f4; --muted:#9ab4aa; --mint:#63f5b2; --amber:#ffc96b; --red:#ff847c; }
-    * { box-sizing:border-box; }
-    body { margin:0; background:radial-gradient(circle at 80% 0,#163629 0,transparent 38%),var(--bg);
-      color:var(--text); font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-    main { width:min(1080px,calc(100% - 36px)); margin:0 auto; padding:64px 0 88px; }
-    .eyebrow { color:var(--mint); letter-spacing:.16em; text-transform:uppercase; font-weight:750; font-size:.78rem; }
-    h1 { font-size:clamp(2.6rem,7vw,5.8rem); line-height:.94; letter-spacing:-.055em; max-width:900px; margin:16px 0 24px; }
-    h2 { font-size:1.55rem; margin:0 0 14px; }
-    p { color:var(--muted); max-width:760px; }
-    .lead { font-size:1.28rem; color:#d7ebe4; }
-    .grid { display:grid; grid-template-columns:repeat(12,1fr); gap:16px; margin-top:34px; }
-    .card { grid-column:span 4; background:linear-gradient(155deg,rgba(25,51,43,.95),rgba(12,29,24,.95));
-      border:1px solid var(--line); border-radius:20px; padding:24px; box-shadow:0 18px 55px rgba(0,0,0,.23); }
-    .wide { grid-column:span 8; } .full { grid-column:1/-1; }
-    .metric { color:var(--mint); font-size:2rem; font-weight:800; letter-spacing:-.04em; }
-    .label { color:var(--muted); font-size:.82rem; text-transform:uppercase; letter-spacing:.09em; }
-    ul { color:#c8ded6; padding-left:20px; } li+li { margin-top:8px; }
-    .warning { color:var(--amber); border-color:#755f2d; }
-    .negative { color:var(--red); }
-    code { color:#baf7dc; }
-    a { color:var(--mint); }
-    footer { margin-top:42px; color:var(--muted); font-size:.9rem; }
-    @media (max-width:780px) { .card,.wide { grid-column:1/-1; } main { padding-top:38px; } }
+    :root {
+      color-scheme: dark;
+      --ink: #f4fbf8; --muted: #9bb3aa; --bg: #06100d; --panel: #0d1d18;
+      --line: #26483c; --mint: #67f5b5; --amber: #ffcb72; --red: #ff8c84;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background:
+      radial-gradient(circle at 85% -5%, #174933 0, transparent 35%), var(--bg);
+      font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { width: min(1120px, calc(100% - 34px)); margin: auto; padding: 58px 0 82px; }
+    h1 { max-width: 950px; margin: 14px 0 24px; font-size: clamp(3rem, 8vw, 6.5rem);
+      line-height: .91; letter-spacing: -.062em; }
+    h2 { margin: 0 0 12px; font-size: 1.5rem; letter-spacing: -.025em; }
+    h3 { margin: 0 0 6px; } p { color: var(--muted); }
+    .eyebrow, .kicker { color: var(--mint); font-size: .76rem; font-weight: 800;
+      letter-spacing: .16em; text-transform: uppercase; }
+    .lead { max-width: 790px; color: #d8eae3; font-size: 1.22rem; }
+    .pills { display: flex; flex-wrap: wrap; gap: 9px; margin: 30px 0 10px; }
+    .pill { padding: 8px 13px; border: 1px solid var(--line); border-radius: 99px;
+      background: rgba(13,29,24,.8); color: #cce4da; font-weight: 700; }
+    .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 15px; margin-top: 34px; }
+    .card { grid-column: span 4; padding: 23px; border: 1px solid var(--line);
+      border-radius: 19px; background: linear-gradient(145deg, rgba(20,43,35,.96), rgba(10,25,20,.96));
+      box-shadow: 0 18px 55px rgba(0,0,0,.22); }
+    .wide { grid-column: span 8; } .full { grid-column: 1 / -1; }
+    .metric { margin: 2px 0; color: var(--mint); font-size: 2.05rem; font-weight: 850; letter-spacing: -.045em; }
+    .negative { color: var(--red); } .small { font-size: .84rem; }
+    .profiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 16px; }
+    .profile { padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: #091713; }
+    .allocation { color: var(--mint); font-weight: 800; }
+    .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin: 18px 0 4px; }
+    .node { padding: 11px 14px; border: 1px solid var(--line); border-radius: 10px; background: #091713; }
+    .arrow { color: var(--mint); font-weight: 900; }
+    ul { margin-bottom: 0; padding-left: 20px; color: #c9ded6; } li + li { margin-top: 7px; }
+    .notice { border-color: #705b30; } .notice h2 { color: var(--amber); }
+    a { color: var(--mint); } footer { margin-top: 38px; color: var(--muted); font-size: .86rem; }
+    @media (max-width: 790px) { .card, .wide { grid-column: 1 / -1; } .profiles { grid-template-columns: 1fr; }
+      main { padding-top: 36px; } }
   </style>
 </head>
 <body>
 <main>
-  <div class="eyebrow">Agent Builders Cup · Meteora</div>
-  <h1>Liquidity automation that trusts the chain before it trusts itself.</h1>
-  <p class="lead">Regime LP Operator adapts Meteora DLMM ranges to volatility while verifying
-    positions, capital, deadlines, and performance through independent sources.</p>
+  <div class="eyebrow">Agent Builders Cup · Meteora track</div>
+  <h1>Liquidity automation that trusts the chain before itself.</h1>
+  <p class="lead">Regime LP Operator selects Meteora DLMM ranges from market regime,
+    keeps risk inside explicit sleeves, and reconciles every lifecycle decision against
+    Solana rather than a hopeful local cache.</p>
 
-  <section class="grid" aria-label="Live evidence">
-    <article class="card"><div class="label">Effective equity</div><div class="metric">$77.30</div><p>Wallet plus chain-confirmed LP value, capped below the configured ceiling.</p></article>
-    <article class="card"><div class="label">Chain ↔ executors</div><div class="metric">2 ↔ 2</div><p>Zero orphans and zero ghosts in the observed live snapshot.</p></article>
-    <article class="card"><div class="label">Phantoms ignored</div><div class="metric">30</div><p>Stale OPEN cache rows safely rejected by Solana authority reads.</p></article>
+  <div class="pills" aria-label="Official judging weights">
+    <span class="pill">40% Volume</span><span class="pill">40% P&amp;L</span>
+    <span class="pill">20% HBOT Vote</span><span class="pill">Rank-normalized</span>
+    <span class="pill">48-hour unattended run</span>
+  </div>
+
+  <section class="grid" aria-label="Submission evidence and product design">
+    <article class="card full"><div class="kicker">Official competition accounting</div>
+      <p>Volume is gross filled notional—not capital deposited or whole-pool flow. P&amp;L,
+        volume, and voting are rank-normalized at 40/40/20; trading fees come from the same
+        $800 account. A finals clock blocks late entries and winds down before forced closure.</p>
+    </article>
+    <article class="card"><div class="kicker">Deposited lifetime</div><div class="metric">$798.37</div>
+      <p>Observed in Meteora Portfolio; not treated as current wallet equity.</p></article>
+    <article class="card"><div class="kicker">Fees claimed</div><div class="metric">$8.58</div>
+      <p>Real mainnet activity accumulated during product testing.</p></article>
+    <article class="card"><div class="kicker">All-time P&amp;L</div><div class="metric negative">-$2.80</div>
+      <p>-0.35%, reported plainly instead of cherry-picking a winning position.</p></article>
+
+    <article class="card full"><div class="kicker">Latest live reconciliation · 21 Aug 18:51 UTC</div>
+      <div class="metric">2 positions ↔ 2 executors</div><p>Zero orphans, zero ghosts; $78.49 liquid
+      wallet, $128.36 observed total equity, and no stranded inventory.</p></article>
+
+    <article class="card full">
+      <div class="kicker">One agent, three explicit choices</div><h2>Risk is a user input—not an improvised prompt.</h2>
+      <div class="profiles">
+        <div class="profile"><h3>Guardian</h3><div class="allocation">80 / 10 / 10</div><p>Core / satellite / runner. One small runner slot.</p></div>
+        <div class="profile"><h3>Balanced</h3><div class="allocation">60 / 20 / 20</div><p>Default diversified operating profile.</p></div>
+        <div class="profile"><h3>Hunter</h3><div class="allocation">40 / 40 / 20</div><p>Two runner slots; experimental quick-in/out remains off by default.</p></div>
+      </div>
+    </article>
 
     <article class="card wide">
-      <h2>Four checks, every minute</h2>
-      <ul>
-        <li><strong>Orphan Guard:</strong> reconcile owned positions and running executors.</li>
-        <li><strong>Wallet Audit:</strong> find liquid quote and stranded token inventory.</li>
-        <li><strong>Capital Guard:</strong> convert real equity into sleeve, loss, gas, and rent budgets.</li>
-        <li><strong>Lifecycle Guard:</strong> enforce UTC deadlines and react to material inventory fills.</li>
-      </ul>
+      <div class="kicker">Architecture</div><h2>Observe → decide → execute → verify</h2>
+      <div class="flow" aria-label="System flow">
+        <span class="node">Market + wallet</span><span class="arrow">→</span>
+        <span class="node">Risk guards</span><span class="arrow">→</span>
+        <span class="node">Condor agent</span><span class="arrow">→</span>
+        <span class="node">Hummingbot / Gateway</span><span class="arrow">→</span>
+        <span class="node">Meteora + Solana</span>
+      </div>
+      <p>Capital, lifecycle, orphan, wallet, competition-clock, runner, hedge-readiness, and experimental-entry
+        guards are independently testable. Chain ownership is authoritative; missing data is unknown, not absent.</p>
     </article>
     <article class="card">
-      <div class="label">Honest lifetime PnL</div><div class="metric negative">-$2.8245</div>
-      <p>Meteora's own API, about -0.405%. No cherry-picked profit claim.</p>
+      <div class="kicker">Portfolio evidence</div><div class="metric">61.11%</div>
+      <p>Observed win rate. Biggest win: $1.27 (+6.35%). Average invested: $22.18.</p>
     </article>
 
     <article class="card full">
-      <h2>Why this is infrastructure, not a screenshot</h2>
-      <p>Live testing exposed false-failed creates, false-successful stops, zero-proceeds
-        records, partial wallet reads, mixed-quote sizing, deadline drift, and stale cache
-        authority. Each failure became a deterministic guard with regression coverage.</p>
-      <p><strong>Stack:</strong> Condor · Hummingbot API · Gateway · Meteora DLMM · Solana ·
-        Jupiter · GeckoTerminal · Pydantic · pytest</p>
+      <div class="kicker">Built from failures</div><h2>Recovery behavior is part of the product.</h2>
+      <ul>
+        <li>A false-failed create is adopted when its on-chain position exists.</li>
+        <li>A false-successful stop is not considered closed until the chain agrees.</li>
+        <li>Unresolved executors and unreadable pools stay unclassified—never auto-cleaned as ghosts or phantoms.</li>
+        <li>Rate-limit responses cannot collapse scanner retry delay to zero.</li>
+        <li>A tested outcome-learning routine distinguishes indexing lag from real failures and may tune only bounded execution mechanics—never hard risk controls. Deterministic host capture remains a pre-freeze item.</li>
+        <li>Restart-on-boot is enabled so an unattended run resumes its supervision loop.</li>
+      </ul>
     </article>
 
-    <article class="card full warning">
-      <h2>Two external steps remain</h2>
-      <p>Add the public repository URL and uploaded demo URL before submitting. Local or
-        fabricated links are intentionally not used.</p>
+    <article class="card full notice">
+      <h2>Submission integrity</h2>
+      <p>The strategy, judge quick start, reproducible verification command, limitations,
+        and demo script are prepared. The <a href="https://github.com/cryptoclassdev/condor/tree/meteora-cup">public fork</a>
+        exists; recorded demo upload and clean-clone proof remain. No fabricated links or projected returns.</p>
     </article>
   </section>
-  <footer>Evidence snapshot: Solana mainnet, 20 Aug 2026 around 17:10 UTC. Values change with the market.</footer>
+  <footer>Lifetime evidence: Meteora Portfolio, 20 Aug 2026. Operational snapshot: 21 Aug 2026. Refresh immediately before submission;
+    market and wallet values change. Strategy code freezes when submissions close on 31 Aug 2026.</footer>
 </main>
 </body>
 </html>
-

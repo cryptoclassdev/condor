@@ -26,24 +26,39 @@ Every minute the strategy runs:
    cap sizing to actual equity.
 4. `lifecycle_guard` — enforce exact UTC deadlines, stop proximity, and material fill-change
    regime rechecks.
+5. `competition_guard` — during finals only, block late entries and start deterministic
+   wind-down before the organizer closes every remaining position.
+
+The strategy requires every create to be passed through `outcome_learner` twice: first as
+same-tick pending evidence, then after the next chain + wallet reconciliation. The pure routine
+and append-only event format are implemented and tested; deterministic host-level capture is
+still a pre-freeze integration item, so live correctness never depends on the model remembering
+to invoke it. Repeated failures may tune only bounded execution mechanics
+(funding haircut, range-width scale, and RPC backoff); portfolio risk controls are outside
+the learner's interface and cannot be relaxed by it. Confirmed closes are attributed by
+exit reason; a hard-stop adds a 30-tick pool cooldown, and every later entry must pass the
+learner's persistent pool-gate check first.
 
 Every fifth tick it runs market discovery. `meteora_pool_scanner` serves core/satellites;
 `runner_scanner` independently searches young Meteora SOL pools with accelerating five-minute
-volume. Candidates still require a regime classification and token safety check.
+volume. Candidates still require a regime classification and token safety check. Runner
+discovery paces the public GeckoTerminal requests below its published limit, backs off on HTTP
+429, opens a provider circuit after two exhausted feeds, and labels partial source coverage so
+an upstream failure cannot be mistaken for a quiet market or monopolize a supervision tick.
 
 ## Quick Start
 
 ### 1. Install Condor and its dependencies
 
-Use the public hackathon fork once it is published. The URL below is intentionally a
-placeholder until that external step is complete; do not substitute the upstream Condor
-repository because it does not contain this branch yet.
+Use the public hackathon fork and its frozen submission branch; do not substitute the upstream
+Condor repository because it does not contain this agent.
 
 ```bash
-git clone <PUBLIC_FORK_URL>
+git clone https://github.com/cryptoclassdev/condor.git
 cd condor
 git switch meteora-cup
 make install
+make verify-meteora
 ```
 
 `make install` runs Condor's interactive setup and installs the Python and frontend
@@ -66,8 +81,7 @@ pause rather than silently switching environments.
 
 ### 3. Choose a risk profile
 
-Set `default_config.risk_profile` in
-`strategies/regime_lp_operator/strategy.md` before starting the session:
+The **Start New Session** dialog presents the configured profiles as three selectable cards:
 
 | Profile | User-facing level | Core / Satellite / Runner | Intended use |
 |---|---|---:|---|
@@ -76,9 +90,10 @@ Set `default_config.risk_profile` in
 | `hunter` | More risky | 40% / 40% / 20% | More satellite capacity while retaining hard sleeve and loss limits |
 
 These percentages split the risk capital reported by `capital_guard`; they do not authorize
-the agent to spend the nominal configuration ceiling. The current Condor start dialog does
-not yet expose this as a dropdown, so the profile must be selected in configuration before
-launch.
+the agent to spend the nominal configuration ceiling. The selected profile is sent as a
+per-session override; recursive config merging preserves the strategy's reserve, daily-loss,
+and shutdown limits. Operators can still change `default_config.risk_profile` in
+`strategies/regime_lp_operator/strategy.md` to choose the preselected default.
 
 ### 4. Start the operator
 
@@ -106,15 +121,20 @@ Before leaving the operator unattended, confirm the session journal reports:
 - an explicit UTC deadline for every satellite or runner position;
 - no forced entry when the relevant scanner returns zero candidates.
 
-Run the agent-specific regression suite with:
+`hedge.enabled` remains false until a perpetual credential is configured. The read-only
+`hedge_guard` can still prove sizing: it hedges measured SOL token inventory rather than LP
+notional, caps the target to real equity, blocks stale price inputs, and refuses dust orders.
+
+`quick_in_out.enabled` also remains false. This hunter-only experiment packages the
+first-retracement quick-in/out idea inside the existing runner sleeve: one attempt, one slot,
+at most 2.5% of real equity and $50, with a 3% stop, 5% take-profit, 15-minute deadline and
+flow-decay exit. At the current small wallet it correctly blocks because the capped deposit
+falls below the $20 rent-aware testing floor.
+
+Run the complete judge-facing regression and frontend build with:
 
 ```bash
-uv run pytest \
-  tests/test_meteora_restart_recovery.py \
-  tests/test_meteora_capital_guard.py \
-  tests/test_meteora_lifecycle_guard.py \
-  tests/test_meteora_runner_scanner.py \
-  tests/test_risk_gate.py
+make verify-meteora
 ```
 
 ## Routines
@@ -122,8 +142,12 @@ uv run pytest \
 | Routine | Purpose |
 |---|---|
 | `capital_guard` | Authoritative effective equity, reserve-adjusted entry capacity, sleeve and loss budgets |
+| `competition_guard` | Finals entry cutoff and end-of-race wind-down clock |
+| `hedge_guard` | Read-only SOL inventory hedge target with stale-price, dust, credential, and real-equity caps |
+| `quick_in_out_guard` | Read-only hunter micro-entry/monitor gate for first-retracement flow |
 | `lifecycle_guard` | Exact max-hold deadlines, fill transitions, stop and recheck actions |
 | `orphan_guard` | Chain ↔ executor reconciliation, ghost/orphan handling, suspect-close detection |
+| `outcome_learner` | Durable outcome classification, duplicate-retry blocking, and bounded execution adaptation |
 | `wallet_audit` | Full wallet inventory, including stranded base-token proceeds |
 | `meteora_truth` | Meteora-native PnL and vs-HODL evidence |
 | `regime_engine` | CALM/RANGING/TRENDING/HOT/CHAOTIC classification |
@@ -135,12 +159,29 @@ uv run pytest \
 ```bash
 uv run pytest \
   tests/test_meteora_capital_guard.py \
+  tests/test_meteora_competition_guard.py \
   tests/test_meteora_lifecycle_guard.py \
   tests/test_meteora_runner_scanner.py \
+  tests/test_meteora_outcome_learning.py \
+  tests/test_meteora_quick_in_out.py \
+  tests/test_meteora_hedge_plan.py \
   tests/test_risk_gate.py
 ```
 
 The strategy currently targets `solana-mainnet-beta`. Treat all execution as live unless the
 runtime connector itself proves otherwise.
 
-Hackathon materials are in [`hackathon/`](../../hackathon/).
+## Finals accounting
+
+Organizer guidance defines volume as gross filled notional and scores volume, P&L and voting
+by rank (40/40/20); deployed LP capital and whole-pool volume are not the agent's scored
+volume. Trading fees come from the same $800 account. Finals configuration must enable
+`competition_guard` with the exact end timestamp; it blocks new entries for the final 135
+minutes and orders a verified all-position wind-down in the final 15 minutes. The default is
+disabled because inventing the finals timestamp would be less safe than failing closed when
+the real value is supplied.
+
+Hackathon materials are in [`hackathon/`](../../hackathon/). Start with the
+[`JUDGE_QUICKSTART.md`](../../hackathon/JUDGE_QUICKSTART.md), then use the
+[`finals-test-checklist.md`](../../hackathon/finals-test-checklist.md) before increasing
+capital or recording the submission demo.

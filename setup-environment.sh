@@ -961,6 +961,10 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 # Always create/update config.yml with template
+# The file holds API credentials and the dashboard JWT secret. Lock it before
+# the first byte is written so there is no world-readable creation window.
+touch "$CONFIG_FILE"
+chmod 600 "$CONFIG_FILE"
 if [ ! -f "$CONFIG_FILE" ] || [ ! -s "$CONFIG_FILE" ]; then
     msg_info "Creating $CONFIG_FILE with template..."
     cat > "$CONFIG_FILE" << 'CONFIGEOF'

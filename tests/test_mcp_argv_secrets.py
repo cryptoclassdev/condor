@@ -8,6 +8,7 @@ still finds them through the non-secret marker that replaced it.
 """
 
 import sys
+import json
 
 import pytest
 
@@ -198,3 +199,46 @@ def test_hummingbot_settings_read_credentials_from_env(monkeypatch):
     assert hb_server.settings.api_password == API_PASSWORD
     assert hb_server.settings.api_url == "http://10.0.0.5:8000"
     assert hb_server.settings.server_name == "prod"
+
+
+def test_acp_session_payload_never_contains_mcp_secrets():
+    """ACP bridges may serialize session/new MCP config into a child argv.
+
+    Therefore server-level env values must be lifted to the ACP process env
+    before the protocol payload is built, not merely removed from each MCP
+    server's direct ``args`` list.
+    """
+    from condor.acp.client import ACPClient
+
+    secret = "payload-secret-visible-in-ps"
+    client = ACPClient(
+        command="unused",
+        mcp_servers=[
+            {
+                "name": "example",
+                "command": "example-mcp",
+                "args": ["--safe-coordinate", "local"],
+                "env": [{"name": "EXAMPLE_SECRET", "value": secret}],
+            }
+        ],
+    )
+
+    payload = json.dumps(client._session_new_params())
+    assert secret not in payload
+    assert "EXAMPLE_SECRET" not in payload
+    assert client.mcp_servers[0]["env"] == []
+    assert client.extra_env["EXAMPLE_SECRET"] == secret
+
+
+def test_acp_rejects_conflicting_server_env_values():
+    """Lifting is only safe when one inherited value serves every MCP child."""
+    from condor.acp.client import ACPClient
+
+    with pytest.raises(ValueError, match="conflicting MCP environment"):
+        ACPClient(
+            command="unused",
+            mcp_servers=[
+                {"name": "one", "command": "mcp", "env": [{"name": "KEY", "value": "a"}]},
+                {"name": "two", "command": "mcp", "env": [{"name": "KEY", "value": "b"}]},
+            ],
+        )

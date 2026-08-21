@@ -56,6 +56,11 @@ class AgentConfig(BaseModel):
     max_ticks: int = Field(
         default=0, description="Max ticks before auto-stop; 0 = unlimited"
     )
+    max_tool_calls_per_tick: int = Field(
+        default=0,
+        ge=0,
+        description="Deterministic non-exit tool-call ceiling per tick; 0 = unlimited",
+    )
     bot_name: str = Field(
         default="",
         description="If set, the agent operates this Hummingbot bot's controllers "

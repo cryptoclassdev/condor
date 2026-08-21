@@ -4,6 +4,7 @@ import { useAuth } from "@/lib/auth";
 import { toolCallState } from "@/lib/formatters";
 import { getViewContext } from "@/lib/viewContext";
 import { WS_AUTH_SUBPROTOCOL } from "@/lib/websocket";
+import { classifyChatReconnect } from "@/lib/chatReconnect";
 
 export interface ToolCall {
   tool_call_id: string;
@@ -225,7 +226,7 @@ function turnsToMessages(turns: ConversationTurn[]): ChatMessage[] {
 const FLUSH_INTERVAL_MS = 50;
 
 export function useChatSocket() {
-  const { token, user } = useAuth();
+  const { token, user, logout } = useAuth();
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   // Whether this hook still wants a socket. `close()` is asynchronous, so the
@@ -506,11 +507,28 @@ export function useChatSocket() {
       if (wsRef.current !== ws) return;
       setIsConnected(false);
       if (!shouldConnect.current) return;
-      reconnectTimer.current = setTimeout(() => connect(), reconnectDelay.current);
-      reconnectDelay.current = Math.min(
-        reconnectDelay.current * 2,
-        MAX_RECONNECT_DELAY,
-      );
+      // A rejected WebSocket handshake does not expose its HTTP status to
+      // browser JavaScript. Probe the authenticated REST surface before
+      // retrying: an expired/revoked session should log out once, not generate
+      // one 403 every 30 seconds for the lifetime of every open tab.
+      void fetch("/api/v1/auth/me", {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then((response) => response.status)
+        .catch(() => null)
+        .then((authStatus) => {
+          if (wsRef.current !== ws || !shouldConnect.current) return;
+          if (classifyChatReconnect(authStatus) === "logout") {
+            shouldConnect.current = false;
+            logout();
+            return;
+          }
+          reconnectTimer.current = setTimeout(() => connect(), reconnectDelay.current);
+          reconnectDelay.current = Math.min(
+            reconnectDelay.current * 2,
+            MAX_RECONNECT_DELAY,
+          );
+        });
     };
     ws.onmessage = (ev) => {
       try {
@@ -519,7 +537,7 @@ export function useChatSocket() {
         /* ignore */
       }
     };
-  }, [token, closeSocket]);
+  }, [token, closeSocket, logout]);
 
   const disconnect = useCallback(() => {
     shouldConnect.current = false;

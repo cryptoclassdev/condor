@@ -39,6 +39,8 @@ Guards, because a wrong close is worse than the bug:
   - nothing is closed without on-chain confirmation from the authority source;
   - nothing younger than `min_orphan_age_min` is auto-closed (a fresh create is
     indistinguishable from an orphan — observed at ~3 minutes);
+  - a RUNNING executor younger than `min_ghost_age_min` is never stopped because
+    the owned-position index can lag a confirmed create; unknown age is also safe;
   - unknown age is never auto-closed;
   - every close AND every ghost-stop is verified against a fresh read afterwards;
   - if the executor list cannot be read, the routine classifies nothing at all.
@@ -91,6 +93,10 @@ class Config(BaseModel):
         default=10.0,
         description="Never auto-close an orphan younger than this (minutes)",
     )
+    min_ghost_age_min: float = Field(
+        default=10.0,
+        description="Never auto-stop a ghost candidate younger than this (minutes)",
+    )
     close_orphans: bool = Field(
         default=False, description="Arm orphan closing. Default audit-only."
     )
@@ -116,6 +122,10 @@ class Config(BaseModel):
     max_phantom_rows: int = Field(
         default=5,
         description="Maximum individual phantom-cache rows to render; the full count is preserved",
+    )
+    wallet_wide_authority: bool = Field(
+        default=True,
+        description="The current Gateway positions-owned route returns the full wallet on one call",
     )
 
 
@@ -424,10 +434,22 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         )
 
     ex_strings: dict[str, set] = {}
+    ex_pools: dict[str, set[str]] = {}
+    ex_records: dict[str, dict] = {}
     for ex in execs:
         s: set = set()
         _strings_in(ex, s)
-        ex_strings[str(ex.get("id") or ex.get("executor_id") or "?")] = s
+        eid = str(ex.get("id") or ex.get("executor_id") or "?")
+        ex_records[eid] = ex
+        ex_strings[eid] = s
+        pools_for_executor: set[str] = set()
+        cfgd = ex.get("config") if isinstance(ex.get("config"), dict) else ex
+        ci = ex.get("custom_info") if isinstance(ex.get("custom_info"), dict) else {}
+        for src in (cfgd, ci, ex):
+            pool = _pick(src, _POOL_KEYS)
+            if pool:
+                pools_for_executor.add(pool)
+        ex_pools[eid] = pools_for_executor
 
     # 2. Candidate pools: every pool an executor references, plus anything the
     #    (unreliable) cache mentions, plus operator-supplied extras.
@@ -440,14 +462,8 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         cached = []
 
     pools: set = set(p for p in config.extra_pools if p)
-    for ex in execs:
-        cfgd = ex.get("config") if isinstance(ex.get("config"), dict) else ex
-        ci = ex.get("custom_info") if isinstance(ex.get("custom_info"), dict) else {}
-        for src in (cfgd, ci, ex):
-            p = _pick(src, _POOL_KEYS)
-            if p:
-                pools.add(p)
-                break
+    for pools_for_executor in ex_pools.values():
+        pools.update(pools_for_executor)
     for rec in cached:
         p = _pick(rec, _POOL_KEYS)
         if p:
@@ -462,18 +478,20 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
 
     # 3. Authority read, per pool.
     pool_list = sorted(pools)
+    authority_pools = pool_list[:1] if config.wallet_wide_authority else pool_list
     results = await asyncio.gather(
-        *[_owned_in_pool(client, config, p) for p in pool_list], return_exceptions=True
+        *[_owned_in_pool(client, config, p) for p in authority_pools],
+        return_exceptions=True,
     )
     confirmed: dict[str, dict] = {}
     readable: set = set()
     unreadable_pools: set = set()
-    for pool, res in zip(pool_list, results):
+    for pool, res in zip(authority_pools, results):
         if isinstance(res, Exception):
-            unreadable_pools.add(pool)
+            unreadable_pools.update(pool_list if config.wallet_wide_authority else [pool])
             logger.info(f"orphan_guard: positions_owned failed for {pool}: {res}")
         else:
-            readable.add(pool)
+            readable.update(pool_list if config.wallet_wide_authority else [pool])
             confirmed.update(res)
     unreadable = [f"{p[:8]}…" for p in sorted(unreadable_pools)]
 
@@ -495,22 +513,28 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         )
 
     # 4. Classify.
-    rows, orphans, ghosts, phantoms = [], [], [], []
+    rows, orphans, ghosts, phantoms, unclassified_cache = [], [], [], [], []
 
     tracked_addrs: set = set()
     unclassified_execs = []
+    indexing_grace_execs = []
     for eid, strings in ex_strings.items():
         hit = strings & set(confirmed)
         if hit:
             tracked_addrs |= hit
             continue
-        # No match — but "no match" only means GHOST if we could actually read the
-        # pool(s) this executor points at. If any of them errored, we simply do not
-        # know, and not-knowing must never authorise stopping a live executor.
-        if strings & unreadable_pools:
+        # No match only means GHOST when the executor identifies its pool and every
+        # identified pool was readable. An unresolved pool is not proof that the
+        # position is absent, even when an unrelated pool read succeeded.
+        executor_pools = ex_pools.get(eid, set())
+        if not executor_pools or not executor_pools.issubset(readable):
             unclassified_execs.append(eid)
         else:
-            ghosts.append({"executor_id": eid, "strings": strings})
+            age = _age_min(ex_records[eid])
+            if age is None or age < config.min_ghost_age_min:
+                indexing_grace_execs.append({"executor_id": eid, "age": age})
+            else:
+                ghosts.append({"executor_id": eid, "strings": strings})
 
     for addr, rec in confirmed.items():
         age = _age_min(rec)
@@ -533,6 +557,10 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
 
     for rec in cached:
         addr = _pick(rec, _ADDR_KEYS)
+        pool = _pick(rec, _POOL_KEYS)
+        if addr and (not pool or pool not in readable):
+            unclassified_cache.append(addr)
+            continue
         if addr and addr not in confirmed:
             phantoms.append(addr)
             if len(phantoms) <= max(0, config.max_phantom_rows):
@@ -649,11 +677,22 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
             f"❓ positions_owned failed for pool(s) {', '.join(unreadable)} — anything there is "
             f"unclassified, not clean. Open nothing new in those pools this tick."
         )
+    if unclassified_cache:
+        notes.append(
+            f"🛑 {len(unclassified_cache)} cache record(s) NOT classified because their pool "
+            f"was missing or unreadable. They are NOT phantoms — the chain did not deny them."
+        )
     if unclassified_execs:
         notes.append(
             f"🛑 {len(unclassified_execs)} executor(s) NOT classified because the pool they "
             f"reference was unreadable. They are NOT ghosts and were not touched — "
             f"'we could not check' is not 'it does not exist'."
+        )
+    if indexing_grace_execs:
+        notes.append(
+            f"⏳ {len(indexing_grace_execs)} executor(s) had no owned-position match but are "
+            f"inside the {config.min_ghost_age_min:g}-minute position-indexing grace period "
+            f"(or have unknown age). They are NOT ghosts and were not stopped; retry next tick."
         )
 
     # 5. Act — orphans (close) and ghosts (stop), bounded together.

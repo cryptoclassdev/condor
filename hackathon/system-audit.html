@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Regime LP Operator — System Audit</title>
+  <style>
+    :root{color-scheme:dark;--bg:#07100d;--card:#102019;--line:#29493d;--text:#eef8f3;--muted:#a7bdb4;--ok:#66efae;--warn:#ffd079}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 90% 0,#174b35,transparent 32%),var(--bg);color:var(--text);font:15px/1.55 system-ui,sans-serif}
+    main{max-width:1080px;margin:auto;padding:52px 22px 80px}h1{font-size:clamp(2.6rem,7vw,5.2rem);line-height:.95;letter-spacing:-.055em;max-width:900px;margin:.2em 0}h2{margin:0 0 10px}.lead{font-size:1.15rem;max-width:760px;color:#d4e7df}.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px;margin-top:30px}.card{grid-column:span 4;background:linear-gradient(145deg,#14291f,#0b1813);border:1px solid var(--line);border-radius:17px;padding:22px}.wide{grid-column:span 8}.full{grid-column:1/-1}.eyebrow{color:var(--ok);font-size:.75rem;font-weight:800;letter-spacing:.15em;text-transform:uppercase}.grade{font-size:3rem;font-weight:900;color:var(--ok)}p,li{color:var(--muted)}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px;border-bottom:1px solid var(--line)}th{color:#dcebe5}.ok{color:var(--ok);font-weight:800}.warn{color:var(--warn);font-weight:800}code{color:#caffdf}a{color:var(--ok)}@media(max-width:760px){.card,.wide{grid-column:1/-1}}
+  </style>
+</head>
+<body><main>
+  <div class="eyebrow">Independent engineering review · 22 August 2026</div>
+  <h1>Ready to demonstrate. Not yet ready to scale blindly.</h1>
+  <p class="lead">The operator is chain-reconciled, restart-aware, bounded by deterministic risk guards, and packaged for judging. This audit separates verified strengths from the remaining gates for larger personal capital.</p>
+  <section class="grid">
+    <article class="card"><div class="eyebrow">Overall grade</div><div class="grade">B+</div><p>No open critical code finding after remediation.</p></article>
+    <article class="card"><div class="eyebrow">Live snapshot</div><div class="grade">2 ↔ 2</div><p>Two chain positions, two executors, zero orphan/ghost classifications at the recorded snapshot.</p></article>
+    <article class="card"><div class="eyebrow">Observed equity</div><div class="grade">$128.36</div><p>Point-in-time mainnet evidence, not a return guarantee.</p></article>
+    <article class="card wide"><h2>What was fixed</h2><ul>
+      <li>ACP bridge credentials no longer travel in process arguments.</li><li>High-severity frontend dependency advisories reduced to zero.</li>
+      <li>Expired browser sessions stop reconnecting instead of producing endless WebSocket 403s.</li><li>Telegram alert polling has a single owner.</li>
+      <li>A 12-call operational budget bounds each reasoning tick while exits and journaling remain available.</li><li>False-success closes with live chain positions become quarantined reconciliation events.</li>
+    </ul></article>
+    <article class="card"><h2>Audit grades</h2><table><tr><td>Correctness</td><td class="ok">A−</td></tr><tr><td>Error handling</td><td class="ok">A−</td></tr><tr><td>Testing</td><td class="ok">A−</td></tr><tr><td>Security</td><td class="warn">B+</td></tr><tr><td>Organization</td><td class="warn">B+</td></tr><tr><td>Documentation</td><td class="ok">A−</td></tr></table></article>
+    <article class="card full"><h2>Capital-increase gates</h2><table><thead><tr><th>Gate</th><th>Status</th><th>Reason</th></tr></thead><tbody>
+      <tr><td>Automated tests and production build</td><td class="ok">Verified</td><td>Regression, dependency and frontend checks</td></tr>
+      <tr><td>Open-position restart recovery</td><td class="ok">Verified</td><td>Session 27 adopted both executors after a forced crash, with no duplicate entry</td></tr>
+      <tr><td>Credential rotation</td><td class="warn">Required before high capital</td><td>Old ACP launch arguments exposed local secrets to the process table</td></tr>
+      <tr><td>Outcome learning</td><td class="warn">Bounded experiment</td><td>Classifier is tested; deterministic capture is not engine-wired yet</td></tr>
+      <tr><td>Demo and public clean clone</td><td class="warn">Submission task</td><td>Video is owner-recorded; branch must pass from a fresh clone</td></tr>
+    </tbody></table></article>
+    <article class="card full"><h2>Recommendation</h2><p>Keep Guardian/Balanced/Hunter selectable, with experimental hedge and quick-in/out features disabled. After restart adoption, credential rotation, and a 24–48 hour fault-free soak, increase funds in measured steps rather than jumping directly to the finals ceiling. The system can seek gains, but neither the audit nor the strategy can guarantee them.</p><p><a href="submission.html">Submission preview</a> · <a href="https://github.com/cryptoclassdev/condor/tree/meteora-cup">Public repository</a></p></article>
+  </section>
+</main></body></html>

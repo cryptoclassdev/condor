@@ -7,11 +7,21 @@ skills:
 default_config:
   # Safety checks run every minute. Market ranking remains a 5-minute deep task.
   frequency_sec: 60
+  # Hard engine-enforced ceiling for non-exit MCP work. Emergency exits,
+  # notifications and the required journal evidence remain available afterward.
+  max_tool_calls_per_tick: 12
   execution_mode: loop
   # The finals require a fully unattended 48-hour run. If Condor itself
   # restarts, the loop supervisor starts a fresh session and the first tick
   # adopts any still-open on-chain LP positions before making decisions.
   restart_on_boot: true
+  # Enable only for the finals image after the organizer publishes the exact
+  # 48-hour end timestamp. Missing/invalid time fails closed for new entries.
+  competition:
+    enabled: false
+    end_at_utc: ''
+    new_entry_cutoff_min: 135
+    winddown_buffer_min: 15
   total_amount_quote: 800
   quote_asset: USDC
   risk_profile: balanced
@@ -38,6 +48,17 @@ default_config:
       runner_max_slots: 2
       runner_unit_scale: 1.0
   runners_enabled: true
+  # Readiness path only until the configured perpetual venue has credentials.
+  # Hedge measured SOL inventory, never the full LP notional.
+  hedge:
+    enabled: false
+    connector: bitget_perpetual
+    trading_pair: SOL-USDT
+    coverage_pct: 100
+    max_hedge_pct_equity: 25
+    min_order_usd: 10
+    rebalance_band_usd: 2
+    max_price_age_sec: 180
   runner:
     min_m5_vol_usd: 8000
     full_size_m5: 50000
@@ -46,6 +67,33 @@ default_config:
     max_hold_min: 90
     max_bins: 25
     reentry_cooldown_min: 120
+  # LP Army-inspired first-retracement experiment. It is intentionally OFF until
+  # dry-run/recovery validation and is never available outside the hunter profile.
+  quick_in_out:
+    enabled: false
+    allowed_profile: hunter
+    max_attempts_per_session: 1
+    max_open_slots: 1
+    max_pct_equity: 2.5
+    max_pct_runner_budget: 12.5
+    max_deposit_usd: 50
+    min_deposit_usd: 20
+    min_m5_vol_usd: 200000
+    min_tvl_usd: 50000
+    min_pool_age_hours: 1
+    max_pool_age_hours: 12
+    min_bullish_leg_pct: 12
+    min_retracement_pct: 2
+    max_retracement_pct: 8
+    min_peak_age_bars: 1
+    max_peak_age_bars: 3
+    min_buy_sell_ratio: 1.25
+    max_bins: 15
+    stop_loss_pct: 3
+    take_profit_pct: 5
+    volume_decay_exit_ratio: 0.6
+    max_hold_min: 15
+    lower_stop_pct: 4
   core:
     pair: SOL-USDC
   satellite:
@@ -126,10 +174,54 @@ that the wallet contains that amount:
   sleeve — a hard exit rule that is guessed is worse than one that is absent.
 Sleeve budgets are hard walls: a sleeve's losses or ambitions never borrow from another.
 
+### Micro quick-in/out experiment (hunter only, disabled by default)
+`quick_in_out` is a deliberately reduced adaptation of the LP Army first-retracement
+"Heart Attack" pattern, not permission to ape into a launch. It lives **inside** the runner
+sleeve and never receives a fourth budget. While `enabled: false`, do not evaluate or open
+it. When enabled after dry-run validation, all of these are mandatory:
+
+- active profile exactly `hunter`; guardian and balanced never inherit it;
+- `quick_in_out_guard(mode="entry")` returns `ELIGIBLE` from complete sources after
+  `token_safety_check` PASS and an independently verified live sell route;
+- first pullback only: ≥$200k m5 volume, ≥$50k TVL, pool age 1–12h, measured bullish leg
+  ≥12%, 2–8% retracement, local peak 1–3 one-minute bars ago, buy/sell count ratio ≥1.25;
+- one session attempt and one slot total; no second entry, average-down, flip, re-chase, or
+  transfer from core/satellite;
+- deposit = the guard's value only: at most 2.5% of real equity, 12.5% of the runner budget,
+  and $50; below the $20 economic floor means no experiment;
+- single-sided SOL quote below price, Bid-Ask, ≤15 bins, with the lower on-chain stopgap 4%
+  below the range floor. Hard exits are −3%, +5%, 15 minutes, or m5 below 60% of entry.
+
+Record the executor id, entry m5, attempt count and exact UTC deadline. This cannot promise
+"no loss": a fast token can gap through a stop or fail to sell. The small capital cap, one
+attempt, verified route and mechanical exits bound the experiment's blast radius.
+
+## SOL hedge readiness (disabled until the venue is connected)
+Read `hedge.enabled`. While false, do not create, resize, or close a perpetual position. On
+deep ticks you may prove readiness with the read-only `hedge_guard` routine, using:
+
+- `sol_amount`: the sum of actual SOL token amounts in OPEN LP positions plus pending
+  SOL-denominated fees — never the full LP notional and never the wallet's gas reserve;
+- `portfolio_equity_usd`: the same actual equity returned by `capital_guard`;
+- `current_short_usd`: the live short notional on the configured connector, or zero only
+  after a successful position read;
+- a fresh SOL/USD observation no older than `hedge.max_price_age_sec`.
+
+The planner targets `coverage_pct` of measured SOL inventory, caps the hedge at
+`max_hedge_pct_equity` of real equity, and refuses dust adjustments below `min_order_usd` or
+`rebalance_band_usd`. A stale/missing price, unreadable equity, unreadable perpetual
+position, or missing venue credential is a hard block. Transaction cost is not a proof
+gate, but exposure and loss caps remain mandatory. When the connector is eventually armed,
+every hedge executor must carry this session's `controller_id`, and an LP close must trigger
+a hedge reduction check in the same tick so a protective short cannot become a naked short.
+
 ## HARD TICK BUDGET
-~1-minute safety tick. **≤ 12 tool calls.** The first four are always `orphan_guard`,
-`wallet_audit`, `capital_guard`, then `lifecycle_guard` (step 0). Reconciliation, capital
-truth and deadlines are not optional. Run pool/runner discovery only every fifth tick
+~1-minute safety tick. **≤ 12 operational MCP calls**, enforced by the engine; host-side
+tool discovery, emergency exits, notifications and the required journal evidence are exempt.
+The first four are always `orphan_guard`,
+`wallet_audit`, `capital_guard`, then `lifecycle_guard` (step 0). When finals mode is enabled,
+`competition_guard` is the fifth mandatory call. Reconciliation, capital truth, deadlines,
+and the race clock are not optional. Run pool/runner discovery only every fifth tick
 (~5 minutes), when a sleeve becomes empty, or when `lifecycle_guard` emits
 `REGIME_RECHECK`. Open at most ONE position per tick.
 
@@ -148,6 +240,13 @@ FAILED-create streak before the fix. **No exceptions for the core pair going for
 create, stop and swap as live capital. Never infer devnet/SoftNet from prose or a handoff;
 verify the connector/network shown by the runtime. If it differs from the constant above,
 pause entries and journal the mismatch before doing anything transactional.
+
+**COMPETITION TRUTH:** official volume is gross filled notional, not LP capital deployed and
+not the selected pool's total volume. Trading fees are charged to the $800 account, so all
+P&L decisions remain net of fees, gas, rent, slippage and cleanup. Scoring is rank-normalized
+(12 points for first and 1 for last in each category), but the finals container is not expected
+to expose the live leaderboard. Never infer competitor state, self-cross, coordinate another
+entrant, or manufacture turnover; use only this agent's market, wallet and position evidence.
 
 **MANDATORY on EVERY `manage_executors(action="create", …)` — swaps AND LP opens:**
 `executor_config` MUST include `"controller_id": "<this session's agent_id>"` (exactly the
@@ -173,6 +272,9 @@ Act on what it reports:
 - **GHOST** (executor RUNNING, no position on-chain) → cleared automatically by the config
   above. Stopping an executor for a position that does not exist cannot lose money, and
   while the ghost stands the sleeve believes that slot is full and will not re-open.
+  The guard enforces a 10-minute indexing grace period after creation (and fail-safe handling
+  for unknown age), because a confirmed Solana position can briefly be absent from Gateway's
+  owned-position index. A grace-period candidate is NOT a ghost and must not be stopped.
 - **UNCLASSIFIED** (`🛑` — the pool an executor references could not be read) → NOT a ghost.
   Leave it completely alone. "We could not check" is not "it does not exist". If the routine
   reports the authority read failed for ALL pools it will refuse to classify anything at
@@ -229,10 +331,29 @@ liquid entry amount.
 "satellite_max_hold_min": <satellite.max_hold_min>, "runner_max_hold_min":
 <runner.max_hold_min>, "satellite_stop_loss_pct": <stop_loss_pct>,
 "runner_stop_loss_pct": <runner.stop_loss_pct>, "runner_executor_ids": [<journalled runner
-ids>]})`**. Act on `EXIT_NOW` in the same tick. `REGIME_RECHECK` forces `regime_engine` in
+ids>], "micro_runner_max_hold_min": <quick_in_out.max_hold_min>,
+"micro_runner_stop_loss_pct": <quick_in_out.stop_loss_pct>,
+"micro_runner_take_profit_pct": <quick_in_out.take_profit_pct>,
+"micro_runner_executor_ids": [<journalled quick-in/out ids>]})`**. Act on `EXIT_NOW` in the same tick. `REGIME_RECHECK` forces `regime_engine` in
 the same tick even if this is not a fifth/deep tick. Pass every runner executor id explicitly
 and journal it at open; without that identity the guard conservatively classifies a non-core
 LP as satellite.
+
+**When `competition.enabled`, then run `competition_guard`** with `end_at_utc`, the configured
+entry cutoff/buffer, and the reconciled count of open positions. Its output overrides all new
+entry logic for the tick:
+
+- `BLOCKED` means the finals timestamp is missing/invalid: monitor exits, open nothing;
+- `WIND_DOWN` means no new positions, but existing positions keep their normal lifecycle;
+- `EXIT_ALL_NOW` means stop every LP with `keep_position=false`, verify chain removal and
+  wallet proceeds, recover residual base inventory, and hold cash;
+- `HOLD_CASH` means remain flat through organizer settlement;
+- only `ACTIVE` allows the normal entry path.
+
+The default 135-minute entry cutoff equals the longest non-core max hold (120 minutes) plus
+the 15-minute close buffer. The buffer gives the agent time to verify both removal and
+swap-back before organizers forcibly close all remaining positions and include them in final
+P&L.
 
 ### 1. Load state — ADOPT every live slot (critical after a restart)
 If `[CORE DATA]` shows no open slots, verify against reality:
@@ -277,6 +398,12 @@ Per RUNNING slot read `net_pnl_pct`, `state`, `out_of_range_seconds`. Track each
   `out_of_range_buffer_pct`% AND `rebalance_cooldown_sec` has elapsed since this slot's last
   action — UNLESS one OHLCV check shows price decisively trending back in;
 - regime for that pool flipped to CHAOTIC (satellites only — core rides it out unless SL hits).
+
+For every open quick-in/out id, run `quick_in_out_guard(mode="monitor",
+entry_m5_volume_usd=<journalled entry m5>)` every tick, not only on deep ticks. `EXIT_NOW`
+means stop and verify immediately. An unreadable source also returns `EXIT_NOW`: without
+fresh flow the micro thesis cannot be proven. Never apply the normal runner's flip,
+re-chase, trailing stop, or 90-minute patience to a quick-in/out position.
 
 **Fast re-chase (UNFILLED quote-only slots that price rose away from):** the hysteresis
 gates above protect positions holding inventory (closing realizes IL). A `side=1` quote-only
@@ -333,6 +460,11 @@ a `learning` when new.
   A zero-candidate result pauses only the runner sleeve for that scan; it does not disable
   future scans and must not be replaced with an old "venue gate" explanation. Run
   `regime_engine` with `sleeve="runner"` for passing runner candidates.
+- If `quick_in_out.enabled`, the active profile is `hunter`, no micro attempt has been made,
+  and the runner scan produced a candidate, run `token_safety_check`, verify a live sell
+  route, then call `quick_in_out_guard(mode="entry")` with the pool, actual equity, runner
+  ceiling and `capital_guard.max next deposit`. Only `ELIGIBLE` may reach step 6. A normal
+  runner PASS does not imply a micro PASS.
 - **PAUSE rule:** if the scanner returns nothing gated, or `regime_engine` classifies ALL top
   candidates CHAOTIC → no entries this tick (dead/berserk market); journal "paused" and hold.
   **But a pause is a claim about the market, not a default.** If the scanner's reject
@@ -378,6 +510,21 @@ do NOT silently shrink to a sub-rent position. The create amount must also be �
 `reserve_pct`% USDC buffer; `capital_guard` separately deducts the native gas reserve and
 next-position rent — if any constraint is short, journal and hold.
 
+**Exact-token funding is mandatory.** For a single-sided quote entry, the create amount must
+also be ≤ the `capital_guard` **per-asset max deposit for that exact quote token**, with a
+further ×0.995 rounding haircut. Aggregate `liquid quote` or `max next deposit` is not evidence
+that USDC exists when most of the wallet is SOL (or vice versa). Shrink to the exact-token cap
+only if the result still clears the ~$20 rent floor; otherwise hold or make a separately
+planned funding swap before the LP create. Never submit an unfunded amount.
+
+Gateway `INSUFFICIENT_BALANCE`, token-transfer `custom program error: 0x1`, or simulation logs
+containing `insufficient funds` are a deterministic funding failure—not a mysterious
+vanishing-create/platform failure. Terminate or ignore the unfunded local executor, reconcile
+wallet and chain, and retry once on the **next eligible deep tick** using the exact-token cap.
+A pause caused only by an earlier insufficient-balance attempt clears automatically once a
+fresh `capital_guard` reports an exact-token amount above the economic floor; it must never
+become an indefinite global core pause.
+
 Shape by regime (from `regime_engine`; full details in the `regime_playbook` skill):
 - CALM (core/majors) → double-sided `side=3`, `extra_params={"strategyType":1}` (Curve),
   10–20 bins, centered. The only mode that needs an entry swap (haircut ×0.995!).
@@ -407,15 +554,24 @@ Shape by regime (from `regime_engine`; full details in the `regime_playbook` ski
   sleeve touches it at any size.
 
 Mechanics, in order:
-1. `get_pool_info` → live price `P`, `bin_step`. **Width clamp:** bins =
+1. Before sizing, call `outcome_learner` with `mode="entry_check"`, the candidate pool,
+   sleeve, and current tick. Only `ENTRY_ALLOWED` may proceed; a reconciliation gate has no
+   time-based override, while an expired strategy-loss cooldown is released automatically.
+2. `get_pool_info` → live price `P`, `bin_step`. **Width clamp:** bins =
    ln(Pu/Pl)/ln(1+bin_step/10000) **< 69** — shrink W until it fits. Bounds MUST bracket `P`.
-2. Base side via entry swap (order_executor MARKET, MintPair). **Haircut the reported fill
-   ×0.995** before using it as `base_amount` (or read the true post-swap wallet balance).
-3. `manage_executors(action="create", executor_type="lp_executor", executor_config={…,
+3. Base side via entry swap (order_executor MARKET, MintPair). **Haircut the reported fill**
+   by the learner's `entry_haircut_bps` (`amount × (1 - bps/10000)`, initially ×0.995)
+   before using it as `base_amount` (or read the true post-swap wallet balance).
+4. `manage_executors(action="create", executor_type="lp_executor", executor_config={…,
    "pool_address":…, "lower_price":…, "upper_price":…, "side":3, "base_amount":…,
    "quote_amount":…, "keep_position":false, "extra_params":{"strategyType":<by regime>}})`.
-4. **Journal the three-outcome test** before the create call: what do we hold if price exits
+5. **Journal the three-outcome test** before the create call: what do we hold if price exits
    above / stays in / exits below — one plain-English line each.
+
+For a quick-in/out open, the guard's smaller values override the generic HOT terms: exact
+guard deposit, side=1, strategyType=2, ≤15 bins, and `lower_limit_price` 4% below the range
+floor. Increment the session attempt count when the create is submitted—not only when it
+reports success—so a false-failure cannot trigger a duplicate attempt.
 
 **VERIFY EVERY CREATE IN BOTH DIRECTIONS — the framework's status is evidence of NOTHING.**
 Observed live, both ways: (a) create returns success but nothing landed on-chain
@@ -434,6 +590,28 @@ reported:
 3. **On any create-failure streak ≥ 2: STOP retrying and reconcile wallet vs book FIRST.**
    "Where did the money go" is answered before any retry — a funding shortage after a FAILED
    create is the false-failure signature, not a reason to swap more funds into the attempt.
+
+**Record the reconciled outcome with `outcome_learner`.** Give every create a stable
+`attempt_id`. A same-tick call must use `confirmation_age_ticks=0`; `PENDING_CONFIRMATION`
+means wait and never retry. On the next tick, after orphan_guard + wallet_audit, call it again
+with the same attempt ID, `confirmation_age_ticks>=1`, the executor status, authoritative
+`chain_position_found`, actual quote `wallet_delta_usd`, and any exact error text. Obey its
+`next` result before another create:
+
+- `ADOPT_OR_RECOVER` / `CLEAN_GHOST_THEN_RETRY` / `HOLD_AND_RECONCILE` authorize no retry;
+- `RETRY_NEXT_DEEP_TICK` and `REBUILD_RANGE_NEXT_DEEP_TICK` authorize at most one retry,
+  only after the clean reconciliation already encoded in the outcome;
+- apply `entry_haircut_bps` to the exact-token cap and `range_width_scale` to the newly
+  computed range on that next eligible create; never apply either to an already-open slot;
+- `rpc_backoff_scale` controls only how long to wait before another authority/discovery read.
+
+The learner may change only those three bounded execution parameters and requires repeated
+evidence before doing so. It cannot change token gates, reserves, stop/drawdown limits,
+sleeve ceilings, maximum slots, network, or transaction authority. Its append-only ledger
+and current state live under the agent's ignored `store/outcome_learning/` runtime directory.
+After every confirmed close, record the close with its exact `exit_reason`, PnL, vs-HODL,
+and tick. A hard-stop outcome places that pool on a 30-tick cooldown and forces fresh
+discovery/regime evidence before it can be entered again.
 
 If the open FAILS simulation → re-check price bracketing + bin count, narrow once, retry once;
 if a swap landed but the open failed, repair (retry with true balance or swap back) — never

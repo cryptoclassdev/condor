@@ -176,6 +176,39 @@ def test_callback_cumulative_exposure_cancelled_same_tick():
     assert second["outcome"]["outcome"] == "cancelled"
 
 
+def test_tick_tool_budget_blocks_extra_work_but_never_exit_or_journal():
+    """A runaway reasoning chain cannot starve emergency cleanup or evidence."""
+    engine = RiskEngine(RiskLimits())
+    callback = auto_approve_with_risk_check(
+        engine, RiskState(), max_tool_calls=2
+    )
+
+    async def _drive():
+        read = lambda name: {"tool": name, "input": {"action": "read"}}
+        first = await callback(read("manage_routines"), _OPTIONS)
+        second = await callback(read("manage_skill"), _OPTIONS)
+        blocked = await callback(read("get_market_data"), _OPTIONS)
+        journal = await callback(
+            {"tool": "trading_agent_journal_write", "input": {"entry_type": "action"}},
+            _OPTIONS,
+        )
+        stop = await callback(
+            {
+                "tool": "manage_executors",
+                "input": {"action": "stop", "executor_id": "open-position"},
+            },
+            _OPTIONS,
+        )
+        return first, second, blocked, journal, stop
+
+    first, second, blocked, journal, stop = asyncio.run(_drive())
+    assert first["outcome"]["outcome"] == "selected"
+    assert second["outcome"]["outcome"] == "selected"
+    assert blocked["outcome"]["outcome"] == "cancelled"
+    assert journal["outcome"]["outcome"] == "selected"
+    assert stop["outcome"]["outcome"] == "selected"
+
+
 # ---------------------------------------------------------------------------
 # dry_run must block manage_bots deploy/mutate actions too, not just
 # manage_executors/place_order/gateway swaps — manage_bots(deploy) places real

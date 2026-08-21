@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
@@ -19,11 +20,18 @@ class Config(BaseModel):
     runner_max_hold_min: float = 90.0
     satellite_stop_loss_pct: float = 8.0
     runner_stop_loss_pct: float = 6.0
+    micro_runner_max_hold_min: float = 15.0
+    micro_runner_stop_loss_pct: float = 3.0
+    micro_runner_take_profit_pct: float = 5.0
     material_fill_change_pct: float = 20.0
     early_exit_buffer_pct: float = 2.0
     runner_executor_ids: list[str] = Field(
         default=[],
         description="Explicit runner executor ids; all other non-core LPs are satellites",
+    )
+    micro_runner_executor_ids: list[str] = Field(
+        default=[],
+        description="Quick-in/out executor ids with their own shorter exits",
     )
 
 
@@ -57,18 +65,31 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         user_data.get(_STATE_KEY) if isinstance(user_data.get(_STATE_KEY), dict) else {}
     )
 
-    rows, next_state = evaluate_lifecycle(
-        executors,
-        now=datetime.now(timezone.utc),
-        previous_state=prior,
-        satellite_max_hold_min=config.satellite_max_hold_min,
-        runner_max_hold_min=config.runner_max_hold_min,
-        satellite_stop_loss_pct=config.satellite_stop_loss_pct,
-        runner_stop_loss_pct=config.runner_stop_loss_pct,
-        runner_executor_ids=config.runner_executor_ids,
-        material_fill_change_pct=config.material_fill_change_pct,
-        early_exit_buffer_pct=config.early_exit_buffer_pct,
-    )
+    lifecycle_kwargs = {
+        "now": datetime.now(timezone.utc),
+        "previous_state": prior,
+        "satellite_max_hold_min": config.satellite_max_hold_min,
+        "runner_max_hold_min": config.runner_max_hold_min,
+        "satellite_stop_loss_pct": config.satellite_stop_loss_pct,
+        "runner_stop_loss_pct": config.runner_stop_loss_pct,
+        "runner_executor_ids": config.runner_executor_ids,
+        "material_fill_change_pct": config.material_fill_change_pct,
+        "early_exit_buffer_pct": config.early_exit_buffer_pct,
+    }
+    # Agent routines hot-reload without restarting the Condor process. During a
+    # rollout, this routine can briefly see the old imported lifecycle module;
+    # omit the new keys until the next process restart instead of losing all
+    # lifecycle coverage to an unexpected-keyword TypeError.
+    if "micro_runner_executor_ids" in inspect.signature(evaluate_lifecycle).parameters:
+        lifecycle_kwargs.update(
+            {
+                "micro_runner_executor_ids": config.micro_runner_executor_ids,
+                "micro_runner_max_hold_min": config.micro_runner_max_hold_min,
+                "micro_runner_stop_loss_pct": config.micro_runner_stop_loss_pct,
+                "micro_runner_take_profit_pct": config.micro_runner_take_profit_pct,
+            }
+        )
+    rows, next_state = evaluate_lifecycle(executors, **lifecycle_kwargs)
     user_data[_STATE_KEY] = next_state
 
     if not rows:

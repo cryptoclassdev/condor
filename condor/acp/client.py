@@ -409,9 +409,38 @@ class ACPClient:
     ):
         self.command = command
         self.working_dir = working_dir or os.getcwd()
-        self.mcp_servers: list[dict[str, Any]] = mcp_servers or []
+        # ACP bridges are allowed to serialize the session/new MCP payload into
+        # a child process command line.  Environment values embedded per server
+        # would then become visible through `ps`, even though they were absent
+        # from the MCP server's own args.  MCP children inherit the bridge
+        # process environment, so lift those values there and keep the protocol
+        # payload credential-free.  Conflicting values fail closed: silently
+        # choosing one would start at least one server with wrong credentials.
+        lifted_env = dict(extra_env or {})
+        sanitized_servers: list[dict[str, Any]] = []
+        for server in mcp_servers or []:
+            clean = dict(server)
+            for entry in clean.get("env") or []:
+                name = str(entry.get("name") or "")
+                value = str(entry.get("value") or "")
+                if not name:
+                    continue
+                existing = lifted_env.get(name)
+                if existing is not None and existing != value:
+                    raise ValueError(
+                        f"conflicting MCP environment value for {name!r}"
+                    )
+                lifted_env[name] = value
+            # Keep the schema-valid field while stripping every serialized
+            # value. Some ACP bridges reject a dynamic MCP definition when the
+            # field is absent and silently fall back to the project's static
+            # server, losing per-session server/chat arguments.
+            if "env" in clean:
+                clean["env"] = []
+            sanitized_servers.append(clean)
+        self.mcp_servers = sanitized_servers
         self.permission_callback = permission_callback
-        self.extra_env = extra_env
+        self.extra_env = lifted_env
         # Text APPENDED to the host's own system prompt (see start()). The only
         # true system-level channel an ACP session has — everything else Condor
         # sends arrives as a user turn and loses the argument (FEAT-025).
@@ -520,6 +549,14 @@ class ACPClient:
         self.active_model_id = current
         if not self.model:
             log.info("ACP session %s using default model %s", self._session_id, current)
+            return
+        if not available:
+            log.info(
+                "ACP bridge does not advertise selectable models; requested %r "
+                "remains a bridge/default preference (effective model %s)",
+                self.model,
+                current,
+            )
             return
         target = resolve_model_id(self.model, available)
         if not target:

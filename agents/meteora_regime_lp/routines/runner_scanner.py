@@ -26,6 +26,7 @@ liquidity/volume gates only, not honeypot/authority gates.
 import asyncio
 import logging
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 import aiohttp
 from pydantic import BaseModel, Field
@@ -42,6 +43,16 @@ GECKO_NETWORK = "solana"
 CLMM_NETWORK = "solana-mainnet-beta"
 VENUE = "meteora"
 SOL_MINT = "So11111111111111111111111111111111111111112"
+
+# GeckoTerminal's keyless API is capped at 30 calls/minute. Keep this routine
+# below 24 calls/minute so the other operator routines retain some headroom.
+GECKO_REQUEST_INTERVAL_SEC = 2.5
+GECKO_MAX_RETRIES = 2
+GECKO_RATE_LIMIT_CIRCUIT_THRESHOLD = 2
+
+
+class GeckoRateLimitError(RuntimeError):
+    """A feed exhausted its bounded HTTP 429 retry budget."""
 
 
 class Config(BaseModel):
@@ -68,23 +79,124 @@ class Config(BaseModel):
     full_size_m5: float = Field(
         default=50000.0, description="m5 USD volume that earns a FULL runner unit"
     )
+    scan_timeout_sec: float = Field(
+        default=55.0,
+        description="Hard wall-clock budget so discovery cannot delay safety supervision",
+    )
     exclude_pools: list[str] = Field(
         default=[], description="Held/blocked pool addresses"
     )
     exclude_mints: list[str] = Field(default=[], description="Held/blocked base mints")
 
 
-async def _gecko_get(session, path, params=None):
+def _retry_delay(headers, attempt: int) -> float:
+    """Return a bounded Retry-After/exponential delay for a 429 response."""
+
+    exponential_floor = min(30.0, 5.0 * (2**attempt))
+    retry_after = headers.get("Retry-After") if headers else None
+    if retry_after:
+        try:
+            return min(30.0, max(exponential_floor, float(retry_after)))
+        except (TypeError, ValueError):
+            try:
+                retry_at = parsedate_to_datetime(retry_after)
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=timezone.utc)
+                return min(
+                    30.0,
+                    max(
+                        exponential_floor,
+                        (retry_at - datetime.now(timezone.utc)).total_seconds(),
+                    ),
+                )
+            except (TypeError, ValueError, OverflowError):
+                pass
+    return exponential_floor
+
+
+async def _gecko_get(
+    session,
+    path,
+    params=None,
+    *,
+    sleep=asyncio.sleep,
+    max_retries: int = GECKO_MAX_RETRIES,
+):
     headers = {"Accept": "application/json;version=20230302"}
-    async with session.get(
-        f"{GECKO_BASE}/{path}",
-        headers=headers,
-        params=params,
-        timeout=aiohttp.ClientTimeout(total=25),
-    ) as resp:
-        if resp.status != 200:
-            raise RuntimeError(f"GeckoTerminal {path} -> HTTP {resp.status}")
-        return await resp.json()
+    for attempt in range(max_retries + 1):
+        async with session.get(
+            f"{GECKO_BASE}/{path}",
+            headers=headers,
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=25),
+        ) as resp:
+            if resp.status == 200:
+                return await resp.json()
+            status = resp.status
+            retry_headers = resp.headers
+
+        if status != 429:
+            raise RuntimeError(f"GeckoTerminal {path} -> HTTP {status}")
+        if attempt >= max_retries:
+            raise GeckoRateLimitError(f"GeckoTerminal {path} -> HTTP {status}")
+
+        delay = _retry_delay(retry_headers, attempt)
+        logger.warning(
+            "runner_scanner: GeckoTerminal rate limited %s; retrying in %.1fs",
+            path,
+            delay,
+        )
+        await sleep(delay)
+
+    raise RuntimeError(f"GeckoTerminal {path} -> retry budget exhausted")
+
+
+async def _fetch_gecko_feeds(
+    session,
+    requests,
+    *,
+    sleep=asyncio.sleep,
+    request_interval: float = GECKO_REQUEST_INTERVAL_SEC,
+):
+    """Fetch a feed batch without letting a provider-wide 429 consume the tick.
+
+    A single exhausted feed may be local or transient. Two consecutive feeds that
+    both exhaust their retry budgets are strong evidence of a provider-level limit,
+    so the remaining feed pages are skipped and the scan is reported as degraded.
+    """
+
+    raw = []
+    successful_sources = 0
+    consecutive_rate_limits = 0
+    circuit_open = False
+
+    for index, (path, params) in enumerate(requests):
+        if index:
+            await sleep(request_interval)
+        try:
+            result = await _gecko_get(session, path, params, sleep=sleep)
+        except GeckoRateLimitError as source_error:
+            consecutive_rate_limits += 1
+            logger.warning("runner_scanner: source failed: %s", source_error)
+            if consecutive_rate_limits >= GECKO_RATE_LIMIT_CIRCUIT_THRESHOLD:
+                circuit_open = True
+                logger.warning(
+                    "runner_scanner: GeckoTerminal rate-limit circuit opened after "
+                    "%d consecutive exhausted feeds",
+                    consecutive_rate_limits,
+                )
+                break
+            continue
+        except Exception as source_error:
+            consecutive_rate_limits = 0
+            logger.warning("runner_scanner: source failed: %s", source_error)
+            continue
+
+        consecutive_rate_limits = 0
+        successful_sources += 1
+        raw.extend(result.get("data", []) or [])
+
+    return raw, successful_sources, circuit_open
 
 
 def _num(v, default=0.0):
@@ -96,6 +208,11 @@ def _num(v, default=0.0):
 
 def _age_hours(created_at: str | None) -> float | None:
     if not created_at:
+        return None
+    try:
+        dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - dt).total_seconds() / 3600.0
+    except ValueError:
         return None
 
 
@@ -134,11 +251,17 @@ def summarize_no_candidates(*, raw_count: int, stats: dict[str, int]) -> str:
         "value, so the operator can judge whether the market is quiet or the number is wrong. "
         "Pausing silently forever is the failure mode; so is blaming the venue filter."
     )
-    try:
-        dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-        return (datetime.now(timezone.utc) - dt).total_seconds() / 3600.0
-    except ValueError:
-        return None
+
+
+def source_coverage_prefix(*, successful: int, total: int) -> str:
+    """Make partial upstream coverage impossible to mistake for full reach."""
+
+    if successful >= total:
+        return ""
+    return (
+        f"SOURCE DEGRADED: {successful}/{total} GeckoTerminal feeds succeeded; "
+        "treat this scan as partial and do not relax gates from it. "
+    )
 
 
 async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -146,47 +269,63 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
 
     raw = []
     try:
-        async with aiohttp.ClientSession() as session:
-            # Fresh Meteora pools are sparse in network-wide feeds.
-            # new_pools is the ONLY genuinely young feed, but it is network-wide,
-            # so most of it is not Meteora — page it as deep as the API allows.
-            # The venue list is sorted two ways on purpose: by 24h volume (which
-            # skews old and large) and by 24h tx count, where a young, busy pool
-            # ranks even when its 24h volume is still small because it has only
-            # existed for two hours.
-            tasks = (
-                [
-                    _gecko_get(
-                        session, f"networks/{GECKO_NETWORK}/new_pools", {"page": p}
-                    )
-                    for p in range(1, 11)
-                ]
-                + [
-                    _gecko_get(
-                        session,
-                        f"networks/{GECKO_NETWORK}/dexes/{VENUE}/pools",
-                        {"page": p, "sort": "h24_volume_usd_desc"},
-                    )
-                    for p in range(1, 4)
-                ]
-                + [
-                    _gecko_get(
-                        session,
-                        f"networks/{GECKO_NETWORK}/dexes/{VENUE}/pools",
-                        {"page": p, "sort": "h24_tx_count_desc"},
-                    )
-                    for p in range(1, 4)
-                ]
-                + [_gecko_get(session, f"networks/{GECKO_NETWORK}/trending_pools")]
-            )
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-        for r in results:
-            if isinstance(r, Exception):
-                logger.warning(f"runner_scanner: source failed: {r}")
-                continue
-            raw.extend(r.get("data", []) or [])
+        async with asyncio.timeout(max(0.01, config.scan_timeout_sec)):
+            async with aiohttp.ClientSession() as session:
+                # Fresh Meteora pools are sparse in network-wide feeds.
+                # new_pools is the ONLY genuinely young feed, but it is network-wide,
+                # so most of it is not Meteora — page it as deep as the API allows.
+                # The venue list is sorted two ways on purpose: by 24h volume (which
+                # skews old and large) and by 24h tx count, where a young, busy pool
+                # ranks even when its 24h volume is still small because it has only
+                # existed for two hours.
+                requests = (
+                    [
+                        (f"networks/{GECKO_NETWORK}/new_pools", {"page": p})
+                        for p in range(1, 11)
+                    ]
+                    + [
+                        (
+                            f"networks/{GECKO_NETWORK}/dexes/{VENUE}/pools",
+                            {"page": p, "sort": "h24_volume_usd_desc"},
+                        )
+                        for p in range(1, 4)
+                    ]
+                    + [
+                        (
+                            f"networks/{GECKO_NETWORK}/dexes/{VENUE}/pools",
+                            {"page": p, "sort": "h24_tx_count_desc"},
+                        )
+                        for p in range(1, 4)
+                    ]
+                    + [(f"networks/{GECKO_NETWORK}/trending_pools", None)]
+                )
+                raw, successful_sources, circuit_open = await _fetch_gecko_feeds(
+                    session, requests
+                )
+    except TimeoutError:
+        return (
+            f"runner_scanner: SOURCE TIMEOUT after {config.scan_timeout_sec:g}s. "
+            "Runner sleeve must PAUSE; safety supervision continues and the scan may "
+            "retry on the next scheduled deep tick."
+        )
     except Exception as e:
         return f"runner_scanner: failed to reach GeckoTerminal: {e}"
+
+    total_sources = len(requests)
+    if successful_sources == 0:
+        return (
+            "runner_scanner: SOURCE UNAVAILABLE: 0/"
+            f"{total_sources} GeckoTerminal feeds succeeded. Runner sleeve must PAUSE; "
+            "do not interpret this as a lack of candidates and do not relax gates."
+        )
+    coverage_prefix = source_coverage_prefix(
+        successful=successful_sources, total=total_sources
+    )
+    if circuit_open:
+        coverage_prefix += (
+            "RATE-LIMIT CIRCUIT OPEN: remaining feeds were skipped to protect the "
+            "supervision tick; retry on the next scheduled deep scan. "
+        )
 
     excl_pools = set(config.exclude_pools)
     excl_mints = set(config.exclude_mints)
@@ -273,7 +412,9 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         )
 
     if not candidates:
-        return summarize_no_candidates(raw_count=len(raw), stats=stats)
+        return coverage_prefix + summarize_no_candidates(
+            raw_count=len(raw), stats=stats
+        )
     candidates.sort(key=lambda c: c["turnover_m5"], reverse=True)
     shortlist = candidates[: config.top_n * 2]
 
@@ -337,7 +478,7 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         "MintPair",
     ]
 
-    summary = (
+    summary = coverage_prefix + (
         f"runner_scanner: {len(ranked)} runner candidate(s) from {len(candidates)} gated "
         f"(rejects — ageOld:{stats['age_old']} ageYoung:{stats['age_young']} "
         f"ageUnknown:{stats['age_unknown']} m5vol:{stats['vol']} accel:{stats['accel']} "

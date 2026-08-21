@@ -863,6 +863,7 @@ class TickEngine:
             execution_mode=mode,
             ledger=self.ledger,
             agent_id=self.agent_id,
+            max_tool_calls=int(self.config.get("max_tool_calls_per_tick", 0) or 0),
         )
 
         agent_key = self._agent_key()

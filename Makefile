@@ -2,7 +2,7 @@
 SHELL := /bin/bash
 export PATH := $(HOME)/.local/bin:$(HOME)/.cargo/bin:$(PATH)
 
-.PHONY: help setup install run run-fg stop restart logs status check-stopped test lint build-frontend setup-chrome pick-model
+.PHONY: help setup install run run-fg stop restart logs status check-stopped test lint build-frontend setup-chrome pick-model verify-meteora
 
 # tmux session Condor runs in
 SESSION := condor
@@ -31,6 +31,7 @@ help:
 	@echo "  make status      - Is Condor running?"
 	@echo "  make test        - Run tests"
 	@echo "  make lint        - Run black + isort"
+	@echo "  make verify-meteora - Verify the judge-facing Meteora package"
 
 setup:
 	@chmod +x setup-environment.sh && ./setup-environment.sh
@@ -113,6 +114,21 @@ restart:
 
 test:
 	uv run pytest
+
+verify-meteora:
+	uv run pytest -q \
+		tests/test_meteora_restart_recovery.py \
+		tests/test_meteora_competition_guard.py \
+		tests/test_meteora_capital_guard.py \
+		tests/test_meteora_lifecycle_guard.py \
+		tests/test_meteora_orphan_guard.py \
+		tests/test_meteora_runner_scanner.py \
+		tests/test_meteora_outcome_learning.py \
+		tests/test_meteora_quick_in_out.py \
+		tests/test_meteora_hedge_plan.py \
+		tests/test_meteora_submission_package.py \
+		tests/test_risk_gate.py
+	$(call find_node,cd frontend && npm test && npm run build)
 
 lint:
 	uv run black .

@@ -613,6 +613,27 @@ def test_resolve_model_id_matching():
     assert resolve_model_id("sonnet", []) is None
 
 
+def test_empty_acp_model_catalog_is_not_reported_as_incompatible(caplog):
+    """Some ACP bridges support a model preference but advertise no catalog.
+
+    An empty catalog is absence of evidence, not evidence that the configured
+    model is unsupported.  The session must retain the bridge default without
+    emitting a warning on every autonomous tick.
+    """
+    import asyncio
+    import logging
+
+    from condor.acp.client import ACPClient
+
+    client = ACPClient(command="unused", model="sonnet")
+    client._session_id = "session-test"
+    with caplog.at_level(logging.INFO, logger="condor.acp.client"):
+        asyncio.run(client._select_model({}))
+
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+    assert "does not advertise selectable models" in caplog.text
+
+
 def test_claude_acp_takes_acp_path_not_pydantic_ai():
     from condor.acp.pydantic_ai_client import is_pydantic_ai_model
 

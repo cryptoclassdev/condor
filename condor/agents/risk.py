@@ -237,6 +237,7 @@ def auto_approve_with_risk_check(
     execution_mode: str = "loop",
     ledger: "BotLedger | None" = None,
     agent_id: str = "",
+    max_tool_calls: int = 0,
 ):
     """Build a permission callback that auto-approves safe tools and risk-checks dangerous ones.
 
@@ -259,14 +260,43 @@ def auto_approve_with_risk_check(
         tool_call_name,
     )
 
-    async def callback(tool_call: dict, options: list[dict]) -> dict:
-        if is_dangerous_tool_call(tool_call):
-            tool_name = tool_call_name(tool_call)
+    admitted_tool_calls = 0
 
+    async def callback(tool_call: dict, options: list[dict]) -> dict:
+        nonlocal admitted_tool_calls
+        tool_name = tool_call_name(tool_call)
+        input_data = tool_call_input(tool_call)
+
+        # A tick budget is a liveness guard, never an obstacle to closing risk
+        # or recording what happened. Tool discovery is host-side and does not
+        # pass this callback; journal/notification calls and explicit exit
+        # actions are deliberately exempt. Everything else is admitted at most
+        # N times, including read-only scans, so a reasoning loop cannot stretch
+        # a one-minute safety tick indefinitely.
+        action = input_data.get("action") if input_data is not None else None
+        is_exit = (
+            (tool_name == "manage_executors" and action == "stop")
+            or (tool_name == "manage_gateway_clmm" and action == "close_position")
+            or (tool_name == "manage_bots" and action in {"stop", "stop_bot", "stop_controllers"})
+        )
+        budget_exempt = tool_name in {
+            "trading_agent_journal_write",
+            "send_notification",
+        } or is_exit
+        if max_tool_calls > 0 and not budget_exempt:
+            admitted_tool_calls += 1
+            if admitted_tool_calls > max_tool_calls:
+                log.warning(
+                    "Tick tool budget exhausted (%d); blocked %s",
+                    max_tool_calls,
+                    tool_name or "<unknown tool>",
+                )
+                return {"outcome": {"outcome": "cancelled"}}
+
+        if is_dangerous_tool_call(tool_call):
             # A dangerous tool whose arguments we can't read can't be risk-checked
             # either, so it never runs unattended: cancel instead of falling
             # through to the auto-approve tail (SEC-093).
-            input_data = tool_call_input(tool_call)
             if input_data is None:
                 log.warning("Blocked %s: tool arguments could not be read", tool_name)
                 return {"outcome": {"outcome": "cancelled"}}

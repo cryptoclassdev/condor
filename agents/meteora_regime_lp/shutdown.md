@@ -4,6 +4,11 @@ cancel_open_orders: true
 ---
 # Emergency shutdown — Meteora Regime LP
 
+This same cleanup applies when `competition_guard` emits `EXIT_ALL_NOW` during the final
+15-minute race buffer. Organizer-forced closure is a backstop, not the preferred execution
+path: closing early enough to verify chain removal and residual-token conversion gives the
+agent control over the P&L that will be scored.
+
 The deterministic winddown has already stopped this session's `lp_executor`s with
 `keep_position=false` (removes on-chain liquidity, refunds position rent). You are the
 best-effort cleanup pass on top of that floor.

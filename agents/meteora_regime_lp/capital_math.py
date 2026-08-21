@@ -25,6 +25,36 @@ class CapitalPlan:
     sleeve_budgets_usd: dict[str, float]
 
 
+def build_spendable_quote_caps(
+    *,
+    quote_values_usd: dict[str, float],
+    native_symbols: set[str],
+    gas_reserve_usd: float,
+    next_position_rent_usd: float,
+) -> dict[str, float]:
+    """Return the maximum deposit funded by each exact quote asset.
+
+    Aggregate liquid value is useful for portfolio capacity but cannot fund an
+    exact-token transfer. Native gas and position rent are deducted only from
+    the native asset that must pay them; USDC value is never inferred from SOL.
+    """
+
+    if gas_reserve_usd < 0 or next_position_rent_usd < 0:
+        raise ValueError("quote reserve inputs cannot be negative")
+
+    caps: dict[str, float] = {}
+    for symbol, value in quote_values_usd.items():
+        if float(value) < 0:
+            raise ValueError("quote values cannot be negative")
+        reserved = (
+            float(gas_reserve_usd) + float(next_position_rent_usd)
+            if symbol.upper() in native_symbols
+            else 0.0
+        )
+        caps[symbol.upper()] = _money(float(value) - reserved)
+    return caps
+
+
 def build_capital_plan(
     *,
     configured_capital_usd: float,

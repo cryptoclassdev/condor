@@ -13,6 +13,34 @@
 - **Files:** frontend/src/components/agent/AgentControls.tsx, agents/meteora_regime_lp/strategies/regime_lp_operator/strategy.md
 - **Date:** 2026-08-21
 
+### startup-dialog-drops-domain-risk-config
+- **Insight:** Resolved: the start dialog now presents configured risk profiles and sends the selected `risk_profile`; recursive backend merging preserves strategy-specific nested risk limits.
+- **Confidence:** 10/10
+- **Source:** learn
+- **Files:** frontend/src/components/agent/AgentControls.tsx, frontend/src/components/agent/startSessionConfig.ts, condor/agents/config.py
+- **Date:** 2026-08-21
+
+### runner-age-parser-unreachable
+- **Insight:** The repeated `ageUnknown` result was caused by `_age_hours()` returning early because its timestamp parser had been stranded after another function's return; after restoring the parser, a live scan reported ageUnknown 0/157 and produced real young/old/volume gate counts.
+- **Confidence:** 10/10
+- **Source:** learn
+- **Files:** agents/meteora_regime_lp/routines/runner_scanner.py, tests/test_meteora_runner_scanner.py
+- **Date:** 2026-08-21
+
+### runner-source-burst-hides-market-reach
+- **Insight:** Launching all 17 GeckoTerminal discovery requests concurrently can exhaust the shared public rate limit and make partial reach look like a quiet market; pace requests, retry HTTP 429 with bounded backoff, and label degraded coverage explicitly.
+- **Confidence:** 10/10
+- **Source:** learn
+- **Files:** agents/meteora_regime_lp/routines/runner_scanner.py, tests/test_meteora_runner_scanner.py
+- **Date:** 2026-08-21
+
+### agent-routine-hot-reload-can-skew-helper-versions
+- **Insight:** Condor hot-reloads an edited agent routine without necessarily reloading its imported helper module; adding new helper parameters/classes can therefore break the running loop even when the files and tests are correct. New routines must tolerate the prior helper signature or explicitly reload a pure helper module.
+- **Confidence:** 10/10
+- **Source:** implementation
+- **Files:** agents/meteora_regime_lp/routines/lifecycle_guard.py, agents/meteora_regime_lp/routines/quick_in_out_guard.py
+- **Date:** 2026-08-21
+
 ## Preferences
 
 ### hackathon-demo-deferred
@@ -43,11 +71,25 @@
 - **Files:** agents/meteora_regime_lp/routines/runner_scanner.py
 - **Date:** 2026-08-21
 
+### age-unknown-relaxation-pending
+- **Insight:** Superseded: do not relax unknown-age entries; the parser bug is fixed and the scanner now receives usable ages, so unknown age remains a fail-closed rejection.
+- **Confidence:** 10/10
+- **Source:** learn
+- **Files:** agents/meteora_regime_lp/routines/runner_scanner.py
+- **Date:** 2026-08-21
+
 ### hedge-cost-secondary
 - **Insight:** For the next cross-venue hedge proof, the user prioritizes validating hedge behavior over minimizing transaction cost, while deterministic exposure and loss limits still remain mandatory.
 - **Confidence:** 10/10
 - **Source:** learn
 - **Files:** agents/meteora_regime_lp/strategies/regime_lp_operator/strategy.md
+- **Date:** 2026-08-21
+
+### micro-quick-in-out-capital-floor
+- **Insight:** The LP Army first-retracement idea is only suitable here as a hunter-only, one-attempt micro experiment. A 2.5%-of-equity cap correctly blocks the current ~$82 book because the resulting deposit is below the $20 rent-aware floor; enablement must wait for adequate test equity and dry-run exit proof.
+- **Confidence:** 10/10
+- **Source:** implementation
+- **Files:** agents/meteora_regime_lp/quick_in_out.py, agents/meteora_regime_lp/strategies/regime_lp_operator/strategy.md
 - **Date:** 2026-08-21
 
 ## Architecture

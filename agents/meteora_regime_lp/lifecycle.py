@@ -66,6 +66,10 @@ def evaluate_lifecycle(
     satellite_stop_loss_pct: float,
     runner_stop_loss_pct: float,
     runner_executor_ids: Iterable[str] = (),
+    micro_runner_executor_ids: Iterable[str] = (),
+    micro_runner_max_hold_min: float = 15.0,
+    micro_runner_stop_loss_pct: float = 3.0,
+    micro_runner_take_profit_pct: float = 5.0,
     material_fill_change_pct: float = 20.0,
     early_exit_buffer_pct: float = 2.0,
 ) -> tuple[list[LifecycleRow], dict[str, dict]]:
@@ -73,6 +77,7 @@ def evaluate_lifecycle(
 
     now = now.astimezone(timezone.utc)
     runner_ids = set(runner_executor_ids)
+    micro_runner_ids = set(micro_runner_executor_ids)
     next_state = {key: dict(value) for key, value in previous_state.items()}
     rows: list[LifecycleRow] = []
 
@@ -98,7 +103,13 @@ def evaluate_lifecycle(
         if created is None:
             created = now
 
-        if executor_id in runner_ids:
+        take_profit_pct: float | None = None
+        if executor_id in micro_runner_ids:
+            sleeve = "runner_micro"
+            hold_min = float(micro_runner_max_hold_min)
+            stop_pct = float(micro_runner_stop_loss_pct)
+            take_profit_pct = float(micro_runner_take_profit_pct)
+        elif executor_id in runner_ids:
             sleeve = "runner"
             hold_min = float(runner_max_hold_min)
             stop_pct = float(runner_stop_loss_pct)
@@ -136,6 +147,8 @@ def evaluate_lifecycle(
             reasons.append("max-hold")
         if pnl_pct <= -stop_pct:
             reasons.append("stop-loss")
+        if take_profit_pct is not None and pnl_pct >= take_profit_pct:
+            reasons.append("take-profit")
 
         if reasons:
             action = "EXIT_NOW"

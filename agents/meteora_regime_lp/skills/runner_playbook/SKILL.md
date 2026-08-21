@@ -45,6 +45,8 @@ Flip option: if >60% filled AND m5 decaying but price holding → flip token-sid
 - The runner budget is the PROFILE's % — losses never borrow from core/satellite sleeves.
 - One runner per token, max concurrent per profile; never re-enter a dropped runner <2h.
 - Scanner returns no gated candidate → sleeve PAUSES. Never loosen gates to find action.
+- `SOURCE DEGRADED` or an open rate-limit circuit also means PAUSE until the next scheduled
+  deep scan; never launch overlapping scanners to compensate for incomplete reach.
 - Every cycle journals: token, at-entry m5, exit trigger, PnL, fees, volume booked —
   runner cycles are the volume engine for the Cup's 40% volume axis (~2× size per cycle).
 
@@ -56,3 +58,17 @@ Flip option: if >60% filled AND m5 decaying but price holding → flip token-sid
 | `hunter` | 40% | 40% (2 slots) | 20% | up to 2 runners |
 Shared: ~10% USDC reserve lives inside SAFE; daily loss limit + drawdown killswitch on the
 whole book; satellites keep their own gates (TVL≥$25k, sustained volume, regime≠CHAOTIC).
+
+## Micro quick-in/out experiment
+
+This is a separate, feature-flagged admission path inside the runner sleeve. It is disabled
+by default and allowed only under `hunter`. `quick_in_out_guard` must return `ELIGIBLE` after
+complete market sources, `token_safety_check` PASS, and a verified sell route. It requires
+the first 2–8% retracement after a ≥12% bullish leg, ≥$200k m5 volume, ≥$50k TVL, pool age
+1–12h, and buy/sell ratio ≥1.25.
+
+One attempt per session, one slot, ≤2.5% of real equity, ≤12.5% of runner budget, ≤$50, and
+never below the $20 economic floor. Enter SOL-quote single-sided below price in ≤15 bins.
+Exit at −3%, +5%, 15 minutes, m5 below 60% of entry, sell dominance, or unreadable flow.
+There is no flip, re-chase, averaging down, or second entry. These tighter terms override
+the normal runner rules only for explicitly journalled micro executor ids.
