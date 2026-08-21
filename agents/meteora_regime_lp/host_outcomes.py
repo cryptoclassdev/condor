@@ -236,6 +236,17 @@ async def prepare(*, client: Any, agent_id: str, tick: int) -> dict[str, Any]:
 def _chain_found(
     pending: PendingAttempt, detail: dict[str, Any], owned: list[dict[str, Any]]
 ) -> bool | None:
+    # Gateway currently returns wallet-wide positions even when queried with a
+    # pool. Scope rows ourselves before interpreting an empty/non-empty set;
+    # otherwise an unrelated core position makes a successfully closed
+    # satellite look permanently ambiguous.
+    rows_with_pool = [row for row in owned if _pick(row, _POOL_KEYS)]
+    if rows_with_pool:
+        owned = [
+            row
+            for row in rows_with_pool
+            if _pick(row, _POOL_KEYS) == pending.pool_address
+        ]
     addresses = {_pick(row, _POSITION_KEYS) for row in owned}
     addresses.discard("")
     target = pending.position_address or _pick(detail, _POSITION_KEYS)
@@ -278,7 +289,14 @@ async def reconcile(*, client: Any, agent_id: str, tick: int) -> None:
                 continue
             status = item.executor_status
             detail_status = str(detail.get("status") or "").upper()
-            if detail_status:
+            # A completed stop normally reads TERMINATED on the following tick.
+            # Preserve the observed SUCCESS and let chain ownership distinguish
+            # a confirmed close from the known false-success orphan case.
+            if detail_status and not (
+                item.action == "close"
+                and status == "SUCCESS"
+                and detail_status == "TERMINATED"
+            ):
                 status = detail_status
             attempt = PositionAttempt(
                 attempt_id=item.attempt_id,

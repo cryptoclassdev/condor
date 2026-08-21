@@ -200,3 +200,31 @@ def test_unknown_position_identity_stays_pending(tmp_path, monkeypatch):
 
     assert not (root / "outcomes.jsonl").exists()
     assert json.loads((root / "pending.json").read_text())["attempts"]
+
+
+def test_closed_pool_is_absent_even_when_wallet_wide_read_has_another_pool():
+    pending = host_outcomes.PendingAttempt(
+        attempt_id="closed",
+        action="close",
+        pool_address="satellite-pool",
+        sleeve="satellite",
+        executor_id="executor",
+        executor_status="SUCCESS",
+        wallet_before_usd=50.0,
+        position_address="",
+        error_message="",
+        observed_tick=1,
+    )
+
+    found = host_outcomes._chain_found(
+        pending,
+        {"status": "TERMINATED", "config": {"pool_address": "satellite-pool"}},
+        [
+            {
+                "pool_address": "core-pool",
+                "position_address": "core-position-authority-123456789",
+            }
+        ],
+    )
+
+    assert found is False
