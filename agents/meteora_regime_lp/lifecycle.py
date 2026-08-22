@@ -72,6 +72,9 @@ def evaluate_lifecycle(
     micro_runner_take_profit_pct: float = 5.0,
     material_fill_change_pct: float = 20.0,
     early_exit_buffer_pct: float = 2.0,
+    out_of_range_max_sec: float = 1800.0,
+    out_of_range_buffer_pct: float = 0.5,
+    rebalance_cooldown_sec: float = 900.0,
 ) -> tuple[list[LifecycleRow], dict[str, dict]]:
     """Evaluate exact deadlines, stop proximity and material fill changes."""
 
@@ -150,6 +153,24 @@ def evaluate_lifecycle(
         if take_profit_pct is not None and pnl_pct >= take_profit_pct:
             reasons.append("take-profit")
 
+        state = str(custom.get("state") or "UNKNOWN").upper()
+        current_price = _num(custom.get("current_price"))
+        lower_price = _num(custom.get("lower_price"))
+        upper_price = _num(custom.get("upper_price"))
+        edge_distance_pct = 0.0
+        if current_price > 0 and lower_price > 0 and current_price < lower_price:
+            edge_distance_pct = 100.0 * (lower_price - current_price) / lower_price
+        elif current_price > 0 and upper_price > 0 and current_price > upper_price:
+            edge_distance_pct = 100.0 * (current_price - upper_price) / upper_price
+        age_sec = max(0.0, (now - created).total_seconds())
+        if (
+            state == "OUT_OF_RANGE"
+            and _num(custom.get("out_of_range_seconds")) >= out_of_range_max_sec
+            and edge_distance_pct > out_of_range_buffer_pct
+            and age_sec >= rebalance_cooldown_sec
+        ):
+            reasons.append("out-of-range-timeout")
+
         if reasons:
             action = "EXIT_NOW"
         elif (
@@ -187,7 +208,7 @@ def evaluate_lifecycle(
                 peak_pnl_pct=peak,
                 fill_pct=fill_pct,
                 fill_change_pct=fill_change,
-                state=str(custom.get("state") or "UNKNOWN"),
+                state=state,
                 action=action,
                 reasons=tuple(reasons),
             )

@@ -337,7 +337,10 @@ liquid entry amount.
 ids>], "micro_runner_max_hold_min": <quick_in_out.max_hold_min>,
 "micro_runner_stop_loss_pct": <quick_in_out.stop_loss_pct>,
 "micro_runner_take_profit_pct": <quick_in_out.take_profit_pct>,
-"micro_runner_executor_ids": [<journalled quick-in/out ids>]})`**. Act on `EXIT_NOW` in the same tick. `REGIME_RECHECK` forces `regime_engine` in
+"micro_runner_executor_ids": [<journalled quick-in/out ids>],
+"out_of_range_max_sec": <out_of_range_max_sec>, "out_of_range_buffer_pct":
+<out_of_range_buffer_pct>, "rebalance_cooldown_sec": <rebalance_cooldown_sec>})`**. Act on
+`EXIT_NOW` in the same tick. `REGIME_RECHECK` forces `regime_engine` in
 the same tick even if this is not a fifth/deep tick. Pass every runner executor id explicitly
 and journal it at open; without that identity the guard conservatively classifies a non-core
 LP as satellite.

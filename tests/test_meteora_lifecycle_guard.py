@@ -24,6 +24,69 @@ def _satellite(*, pnl=-0.01, base=100.0, quote=0.1, price=0.0004):
     }
 
 
+def _core_out_of_range(*, seconds=41777, price=94.46):
+    return {
+        "executor_id": "core-executor",
+        "created_at": "2026-08-20T05:00:00+00:00",
+        "trading_pair": (
+            "So11111111111111111111111111111111111111112-"
+            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+        ),
+        "net_pnl_pct": -0.043,
+        "custom_info": {
+            "position_address": "core-position",
+            "base_amount": 0.644,
+            "quote_amount": 0.0,
+            "current_price": price,
+            "lower_price": 98.59,
+            "upper_price": 100.63,
+            "out_of_range_seconds": seconds,
+            "state": "OUT_OF_RANGE",
+        },
+    }
+
+
+def test_core_out_of_range_past_timeout_is_exit_now():
+    rows, _ = evaluate_lifecycle(
+        [_core_out_of_range()],
+        now=NOW,
+        previous_state={},
+        satellite_max_hold_min=120,
+        runner_max_hold_min=90,
+        satellite_stop_loss_pct=8,
+        runner_stop_loss_pct=6,
+        out_of_range_max_sec=1800,
+        out_of_range_buffer_pct=0.5,
+        rebalance_cooldown_sec=900,
+    )
+
+    assert rows[0].sleeve == "core"
+    assert rows[0].action == "EXIT_NOW"
+    assert "out-of-range-timeout" in rows[0].reasons
+
+
+def test_out_of_range_hysteresis_does_not_exit_inside_time_or_price_buffer():
+    for executor in (
+        _core_out_of_range(seconds=1799),
+        _core_out_of_range(seconds=41777, price=98.30),
+    ):
+        rows, _ = evaluate_lifecycle(
+            [executor],
+            now=NOW,
+            previous_state={},
+            satellite_max_hold_min=120,
+            runner_max_hold_min=90,
+            satellite_stop_loss_pct=8,
+            runner_stop_loss_pct=6,
+            out_of_range_max_sec=1800,
+            out_of_range_buffer_pct=0.5,
+            rebalance_cooldown_sec=900,
+        )
+
+        assert rows[0].action == "MONITOR"
+        assert "out-of-range-timeout" not in rows[0].reasons
+
+
 def test_satellite_has_exact_deadline_and_minutes_remaining():
     rows, state = evaluate_lifecycle(
         [_satellite()],

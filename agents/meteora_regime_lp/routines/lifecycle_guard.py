@@ -25,6 +25,9 @@ class Config(BaseModel):
     micro_runner_take_profit_pct: float = 5.0
     material_fill_change_pct: float = 20.0
     early_exit_buffer_pct: float = 2.0
+    out_of_range_max_sec: float = 1800.0
+    out_of_range_buffer_pct: float = 0.5
+    rebalance_cooldown_sec: float = 900.0
     runner_executor_ids: list[str] = Field(
         default=[],
         description="Explicit runner executor ids; all other non-core LPs are satellites",
@@ -87,6 +90,14 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
                 "micro_runner_max_hold_min": config.micro_runner_max_hold_min,
                 "micro_runner_stop_loss_pct": config.micro_runner_stop_loss_pct,
                 "micro_runner_take_profit_pct": config.micro_runner_take_profit_pct,
+            }
+        )
+    if "out_of_range_max_sec" in inspect.signature(evaluate_lifecycle).parameters:
+        lifecycle_kwargs.update(
+            {
+                "out_of_range_max_sec": config.out_of_range_max_sec,
+                "out_of_range_buffer_pct": config.out_of_range_buffer_pct,
+                "rebalance_cooldown_sec": config.rebalance_cooldown_sec,
             }
         )
     rows, next_state = evaluate_lifecycle(executors, **lifecycle_kwargs)
