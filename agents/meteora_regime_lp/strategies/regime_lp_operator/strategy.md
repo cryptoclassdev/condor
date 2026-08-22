@@ -134,6 +134,9 @@ default_config:
     min_wallet_sol_reserve: 0.06
     max_open_slots: 3
     daily_loss_limit_pct: 6
+    # Keep LP supervision and eligible entries active through the soft loss
+    # band. The separate 10% kill-switch remains an enforced wind-down.
+    soft_drawdown_action: advisory
     drawdown_killswitch_pct: 10
   rpc_url: ''
 default_trading_context: ''
@@ -363,11 +366,13 @@ trading_pair. Compute deployed % per bucket vs targets. Only call `get_portfolio
 when sizing an entry or verifying a close.
 
 ### 2. Risk engine first (cannot be overridden)
-- If cumulative session PnL ≤ the negative **USD daily-loss budget printed by the current
-  `capital_guard` result** → close ALL slots, hold USDC, journal, and only monitor until PnL
-  day resets. Never multiply the percentage by `total_amount_quote`; the configured ceiling
-  may be 10× larger than the real book.
-- If portfolio value drawdown ≥ `drawdown_killswitch_pct`% → same, permanently this session.
+- The **USD daily-loss budget printed by the current `capital_guard` result** is an advisory
+  loss band. Crossing it must be journalled, but must NOT pause ticks, force a cash-only
+  state, or prevent otherwise eligible LP entries. Continue lifecycle exits, recentering,
+  scanning, and sleeve allocation. Never multiply the percentage by `total_amount_quote`;
+  the configured ceiling may be 10× larger than the real book.
+- If portfolio value drawdown ≥ `drawdown_killswitch_pct`% → close ALL slots, hold USDC,
+  and stop permanently for this session. This hard emergency boundary is not advisory.
 - If rebalances this hour ≥ `max_rebalances_per_hour` → monitoring only this tick.
 
 ### 3. Monitor + exit open slots (hysteresis, not twitchiness)
@@ -501,11 +506,13 @@ Top candidate must pass ALL, else try the next (max 2/tick):
 ### 6. Open ONE position (regime-shaped)
 Size only from the current `capital_guard` risk capital and sleeve ceilings: core → up to
 the active profile's core percentage; satellite → min(`satellite.max_pct_per_pool`%,
-remaining satellite budget); **any HOT-regime entry → one third of what that sleeve would
-otherwise deploy, subject to a FLOOR of the position size at which rent stops dominating**
-(rent is ~0.0574 SOL ≈ $4.70; a probe below ~$20 is mostly rent and tests nothing). If the
-sleeve budget cannot fund that floor, journal that the sleeve is underfunded and hold —
-do NOT silently shrink to a sub-rent position. The create amount must also be ≤
+remaining satellite budget); **any HOT-regime entry → max(one third of what that sleeve
+would otherwise deploy, $20)**, then cap it at the remaining sleeve budget. The $20 is the
+LP deposit amount, excluding rent; rent is ~0.0574 SOL ≈ $4.70. If the remaining sleeve
+budget, exact-token balance, and `capital_guard.max next deposit` can jointly fund a $20
+deposit plus rent, OPEN the $20 probe — never reject it merely because one third was below
+the floor. If they cannot fund it, journal that the sleeve is underfunded and hold; do NOT
+silently shrink to a sub-rent position. The create amount must also be ≤
 `capital_guard.max next deposit` and the remaining sleeve budget. Never touch the
 `reserve_pct`% USDC buffer; `capital_guard` separately deducts the native gas reserve and
 next-position rent — if any constraint is short, journal and hold.

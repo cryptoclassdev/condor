@@ -442,6 +442,8 @@ def build_tick_prompt(
         f"Drawdown: {dd_display}",
         f"Status: {'BLOCKED - ' + rs.get('block_reason', '') if rs.get('is_blocked') else 'ACTIVE'}",
     ]
+    if rs.get("advisory_reason"):
+        risk_lines.append(f"Advisory: {rs['advisory_reason']} (ticks and eligible trades remain active)")
     sections.append("\n".join(risk_lines))
 
     # Core skill data (pre-computed)

@@ -23,6 +23,10 @@ class RiskLimitsConfig(BaseModel):
         default=-1.0,
         description="Max drawdown %% that pauses (soft-blocks) ticks; -1 = disabled",
     )
+    soft_drawdown_action: Literal["pause", "advisory"] = Field(
+        default="pause",
+        description="Action at the soft drawdown threshold: pause all ticks or continue with an advisory",
+    )
     shutdown_drawdown_pct: float = Field(
         default=-1.0,
         description="Max drawdown %% that triggers an emergency winddown "

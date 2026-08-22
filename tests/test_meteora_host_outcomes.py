@@ -228,3 +228,97 @@ def test_closed_pool_is_absent_even_when_wallet_wide_read_has_another_pool():
     )
 
     assert found is False
+
+
+def test_reconcile_bounds_each_tick_and_rotates_deferred_attempts(tmp_path, monkeypatch):
+    root = _runtime_store(tmp_path, monkeypatch)
+    attempts = [
+        host_outcomes.PendingAttempt(
+            attempt_id=f"close-{index}",
+            action="close",
+            pool_address=f"pool-{index}",
+            sleeve="core",
+            executor_id=f"executor-{index}",
+            executor_status="SUCCESS",
+            wallet_before_usd=50.0,
+            position_address=f"position-{index}",
+            error_message="",
+            observed_tick=1,
+        )
+        for index in range(3)
+    ]
+    host_outcomes._save_pending(attempts)
+
+    class Executors:
+        calls = []
+
+        async def get_executor(self, executor_id):
+            self.calls.append(executor_id)
+            index = executor_id.rsplit("-", 1)[-1]
+            return {
+                "id": executor_id,
+                "status": "TERMINATED",
+                "config": {"pool_address": f"pool-{index}"},
+                "custom_info": {"position_address": f"position-{index}"},
+            }
+
+    class Gateway:
+        async def get_positions_owned(self, **kwargs):
+            return {"data": []}
+
+    class Client:
+        executors = Executors()
+        portfolio = _Portfolio()
+        gateway_clmm = Gateway()
+
+    asyncio.run(host_outcomes.reconcile(client=Client(), agent_id="agent_1", tick=2))
+
+    assert Client.executors.calls == ["executor-0", "executor-1"]
+    pending = json.loads((root / "pending.json").read_text())["attempts"]
+    assert [item["attempt_id"] for item in pending] == ["close-2"]
+
+
+def test_reconcile_treats_previous_session_attempt_as_due_after_tick_reset(
+    tmp_path, monkeypatch
+):
+    root = _runtime_store(tmp_path, monkeypatch)
+    host_outcomes._save_pending(
+        [
+            host_outcomes.PendingAttempt(
+                attempt_id="host:meteora_regime_lp.operator_30:201:close",
+                action="close",
+                pool_address="pool-authority-123",
+                sleeve="core",
+                executor_id="executor-123",
+                executor_status="SUCCESS",
+                wallet_before_usd=50.0,
+                position_address="position-authority-456",
+                error_message="",
+                observed_tick=201,
+            )
+        ]
+    )
+
+    class ClosedGateway:
+        async def get_positions_owned(self, **kwargs):
+            return {"data": []}
+
+    class ClosedExecutors(_Executors):
+        async def get_executor(self, executor_id):
+            detail = await super().get_executor(executor_id)
+            detail["status"] = "TERMINATED"
+            return detail
+
+    class ClosedClient(_Client):
+        executors = ClosedExecutors()
+        gateway_clmm = ClosedGateway()
+
+    asyncio.run(
+        host_outcomes.reconcile(
+            client=ClosedClient(),
+            agent_id="meteora_regime_lp.operator_31",
+            tick=1,
+        )
+    )
+
+    assert json.loads((root / "pending.json").read_text())["attempts"] == []

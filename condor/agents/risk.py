@@ -22,6 +22,9 @@ class RiskLimits:
     max_position_size_quote: float = 500.0
     max_open_executors: int = 5
     max_drawdown_pct: float = -1.0
+    # ``pause`` preserves the platform default. ``advisory`` reports a soft
+    # breach to the model while keeping supervision and trading ticks active.
+    soft_drawdown_action: str = "pause"
     # Hard kill-switch: a deeper drawdown than the soft ``max_drawdown_pct`` pause;
     # breaching it winds down positions (see condor.agents.shutdown). -1 = disabled.
     shutdown_drawdown_pct: float = -1.0
@@ -50,6 +53,7 @@ class RiskState:
     drawdown_pct: float = 0.0
     is_blocked: bool = False
     block_reason: str = ""
+    advisory_reason: str = ""
     # Hard escalation: set when the shutdown drawdown threshold is breached. The
     # soft ``is_blocked`` only pauses the tick; this triggers an emergency winddown.
     should_shutdown: bool = False
@@ -62,6 +66,7 @@ class RiskState:
             "drawdown_pct": self.drawdown_pct,
             "is_blocked": self.is_blocked,
             "block_reason": self.block_reason,
+            "advisory_reason": self.advisory_reason,
             "should_shutdown": self.should_shutdown,
             "shutdown_reason": self.shutdown_reason,
             # Include limits for prompt display
@@ -113,9 +118,16 @@ class RiskEngine:
             self.limits.max_drawdown_pct >= 0
             and state.drawdown_pct > self.limits.max_drawdown_pct
         ):
-            reasons.append(
-                f"Drawdown {state.drawdown_pct:.1f}% exceeds limit {self.limits.max_drawdown_pct:.1f}%"
-            )
+            if self.limits.soft_drawdown_action == "advisory":
+                state.advisory_reason = (
+                    f"Drawdown {state.drawdown_pct:.1f}% exceeds advisory limit "
+                    f"{self.limits.max_drawdown_pct:.1f}%"
+                )
+            else:
+                reasons.append(
+                    f"Drawdown {state.drawdown_pct:.1f}% exceeds limit "
+                    f"{self.limits.max_drawdown_pct:.1f}%"
+                )
 
         if reasons:
             state.is_blocked = True

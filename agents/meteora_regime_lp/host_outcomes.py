@@ -9,6 +9,7 @@ configuration.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from dataclasses import asdict, dataclass
@@ -23,6 +24,8 @@ from agents.meteora_regime_lp.outcome_learning import (
 
 STORE_ROOT = Path(__file__).resolve().parent / "store" / "outcome_learning"
 PENDING_PATH = STORE_ROOT / "pending.json"
+MAX_RECONCILIATIONS_PER_TICK = 2
+RECONCILIATION_ATTEMPT_TIMEOUT_SEC = 10
 
 _POOL_KEYS = ("pool_address", "pool", "pool_id", "poolAddress")
 _POSITION_KEYS = (
@@ -264,61 +267,76 @@ def _chain_found(
 
 
 async def reconcile(*, client: Any, agent_id: str, tick: int) -> None:
-    del agent_id
     pending = _load_pending()
-    due = [attempt for attempt in pending if tick > attempt.observed_tick]
+    current_prefix = f"host:{agent_id}:"
+    due = [
+        attempt
+        for attempt in pending
+        if not attempt.attempt_id.startswith(current_prefix)
+        or tick > attempt.observed_tick
+    ]
     if not due:
         return
 
-    wallet_now = await _wallet_total(client)
+    wallet_now = await asyncio.wait_for(_wallet_total(client), timeout=5)
     store = FileLearningStore(STORE_ROOT)
     state = store.load_state()
-    remaining = [attempt for attempt in pending if tick <= attempt.observed_tick]
+    remaining = [
+        attempt
+        for attempt in pending
+        if attempt.attempt_id.startswith(current_prefix)
+        and tick <= attempt.observed_tick
+    ]
+    selected = due[:MAX_RECONCILIATIONS_PER_TICK]
+    # Deferred work goes first so a repeatedly failing attempt cannot starve
+    # the rest of the append-only reconciliation queue.
+    remaining.extend(due[MAX_RECONCILIATIONS_PER_TICK:])
 
-    for item in due:
+    for item in selected:
         try:
-            detail = await _executor_detail(client, item.executor_id)
-            pool = item.pool_address or _pick(detail, _POOL_KEYS)
-            if not pool:
-                remaining.append(item)
-                continue
-            owned = await _owned(client, pool)
-            found = _chain_found(item, detail, owned)
-            if found is None or item.wallet_before_usd is None:
-                remaining.append(item)
-                continue
-            status = item.executor_status
-            detail_status = str(detail.get("status") or "").upper()
-            # A completed stop normally reads TERMINATED on the following tick.
-            # Preserve the observed SUCCESS and let chain ownership distinguish
-            # a confirmed close from the known false-success orphan case.
-            if detail_status and not (
-                item.action == "close"
-                and status == "SUCCESS"
-                and detail_status == "TERMINATED"
-            ):
-                status = detail_status
-            attempt = PositionAttempt(
-                attempt_id=item.attempt_id,
-                action=item.action,
-                pool_address=pool,
-                sleeve=item.sleeve,
-                executor_status=status,
-                chain_position_found=found,
-                wallet_delta_usd=wallet_now - item.wallet_before_usd,
-                error_message=item.error_message,
-                confirmation_age_ticks=tick - item.observed_tick,
-                exit_reason=item.exit_reason,
-                pnl_pct=item.pnl_pct,
-                vs_hodl_pct=item.vs_hodl_pct,
-                observed_tick=tick,
-            )
-            result = OutcomeLearner().observe(attempt, state)
-            if result.outcome == "UNCLASSIFIED":
-                remaining.append(item)
-                continue
-            store.record(attempt, result)
-            state = result.state
+            async with asyncio.timeout(RECONCILIATION_ATTEMPT_TIMEOUT_SEC):
+                detail = await _executor_detail(client, item.executor_id)
+                pool = item.pool_address or _pick(detail, _POOL_KEYS)
+                if not pool:
+                    remaining.append(item)
+                    continue
+                owned = await _owned(client, pool)
+                found = _chain_found(item, detail, owned)
+                if found is None or item.wallet_before_usd is None:
+                    remaining.append(item)
+                    continue
+                status = item.executor_status
+                detail_status = str(detail.get("status") or "").upper()
+                # A completed stop normally reads TERMINATED on the following tick.
+                # Preserve the observed SUCCESS and let chain ownership distinguish
+                # a confirmed close from the known false-success orphan case.
+                if detail_status and not (
+                    item.action == "close"
+                    and status == "SUCCESS"
+                    and detail_status == "TERMINATED"
+                ):
+                    status = detail_status
+                attempt = PositionAttempt(
+                    attempt_id=item.attempt_id,
+                    action=item.action,
+                    pool_address=pool,
+                    sleeve=item.sleeve,
+                    executor_status=status,
+                    chain_position_found=found,
+                    wallet_delta_usd=wallet_now - item.wallet_before_usd,
+                    error_message=item.error_message,
+                    confirmation_age_ticks=tick - item.observed_tick,
+                    exit_reason=item.exit_reason,
+                    pnl_pct=item.pnl_pct,
+                    vs_hodl_pct=item.vs_hodl_pct,
+                    observed_tick=tick,
+                )
+                result = OutcomeLearner().observe(attempt, state)
+                if result.outcome == "UNCLASSIFIED":
+                    remaining.append(item)
+                    continue
+                store.record(attempt, result)
+                state = result.state
         except Exception:
             # An authority failure preserves the pending attempt. The next tick
             # retries; absence of evidence is never recorded as a clean result.

@@ -335,10 +335,16 @@ class _FakeTracker:
         return self._dd
 
 
-def _risk(soft, hard):
+def _risk(soft, hard, soft_action="pause"):
     from condor.agents.risk import RiskEngine, RiskLimits
 
-    return RiskEngine(RiskLimits(max_drawdown_pct=soft, shutdown_drawdown_pct=hard))
+    return RiskEngine(
+        RiskLimits(
+            max_drawdown_pct=soft,
+            shutdown_drawdown_pct=hard,
+            soft_drawdown_action=soft_action,
+        )
+    )
 
 
 def test_drawdown_below_soft_does_nothing():
@@ -351,6 +357,16 @@ def test_drawdown_between_soft_and_hard_pauses_only():
     state = _risk(soft=10.0, hard=20.0).get_state(_FakeTracker(15.0))
     assert state.is_blocked is True
     assert state.should_shutdown is False
+
+
+def test_advisory_drawdown_keeps_ticks_active_below_hard_limit():
+    state = _risk(soft=6.0, hard=10.0, soft_action="advisory").get_state(
+        _FakeTracker(6.4)
+    )
+
+    assert state.is_blocked is False
+    assert state.should_shutdown is False
+    assert "Drawdown 6.4% exceeds advisory limit 6.0%" == state.advisory_reason
 
 
 def test_drawdown_beyond_hard_triggers_shutdown():
