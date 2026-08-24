@@ -127,6 +127,29 @@ Before leaving the operator unattended, confirm the session journal reports:
 - an explicit UTC deadline for every satellite or runner position;
 - no forced entry when the relevant scanner returns zero candidates.
 
+Start a read-only soak evidence log with:
+
+```bash
+.venv/bin/python scripts/meteora_soak_audit.py
+```
+
+Each invocation audits the newest session's process, tick freshness, latest 0-orphan / 0-ghost
+reconciliation, wallet-inventory evidence, risk state, and scanner health, then appends one
+JSON sample to that session's ignored `soak_audit.jsonl`. A dead/stale loop or reconciliation
+regression exits non-zero; known source degradation and incomplete historical evidence remain
+visible as warnings. Repeated samples prove that ticks continue advancing during a 24–48 hour
+unattended soak.
+
+Verify the configured Telegram bot without interfering with its long-poll owner:
+
+```bash
+.venv/bin/python scripts/install_telegram_token.py --verify-current
+```
+
+This calls only Telegram's identity and webhook-status endpoints—never `getUpdates`—and never
+prints the credential. Actual token revocation/reissue still happens in BotFather; install the
+replacement through the helper's hidden prompt, then restart Condor once.
+
 `hedge.enabled` remains false until a perpetual credential is configured. The read-only
 `hedge_guard` can still prove sizing: it hedges measured SOL token inventory rather than LP
 notional, caps the target to real equity, blocks stale price inputs, and refuses dust orders.
