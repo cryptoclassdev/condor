@@ -29,6 +29,24 @@ def _create_call(amount: float = 100.0) -> dict:
     }
 
 
+def _spot_recovery_sell_call(amount_base: float = 868.64) -> dict:
+    return {
+        "tool": "manage_executors",
+        "input": {
+            "action": "create",
+            "executor_type": "order_executor",
+            "executor_config": {
+                "controller_id": "test_controller",
+                "connector_name": "solana-mainnet-beta",
+                "trading_pair": "XST-SOL",
+                "side": 2,
+                "amount": amount_base,
+                "execution_strategy": "MARKET",
+            },
+        },
+    }
+
+
 _OPTIONS = [{"kind": "allow_once", "optionId": "allow"}]
 
 
@@ -73,6 +91,34 @@ def test_rejected_create_does_not_accumulate():
     assert not allowed
     assert state.total_exposure == 400.0
     assert state.executor_count == 0
+
+
+def test_spot_recovery_sell_is_risk_reducing_not_new_quote_exposure():
+    """Raw base units in a Solana SELL must not be treated as quote dollars."""
+    engine = RiskEngine(
+        RiskLimits(max_position_size_quote=500.0, max_open_executors=3)
+    )
+    state = RiskState(total_exposure=490.0, executor_count=3)
+
+    allowed, reason = engine.check_executor_action(
+        _spot_recovery_sell_call(), state
+    )
+
+    assert allowed, reason
+    assert state.total_exposure == 490.0
+    assert state.executor_count == 3
+
+
+def test_spot_buy_still_counts_raw_amount_when_no_quote_amount_is_supplied():
+    call = _spot_recovery_sell_call()
+    call["input"]["executor_config"]["side"] = 1
+    engine = RiskEngine(RiskLimits(max_position_size_quote=500.0))
+    state = RiskState(total_exposure=0.0)
+
+    allowed, reason = engine.check_executor_action(call, state)
+
+    assert not allowed
+    assert "position limit" in reason
 
 
 def test_non_create_actions_do_not_accumulate():

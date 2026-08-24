@@ -31,6 +31,21 @@ def test_drawdown_is_zero_without_exposure(tmp_path):
     assert journal.get_drawdown_pct() == 0.0
 
 
+def test_drawdown_denominator_does_not_collapse_when_one_sleeve_closes(tmp_path):
+    """Closing one sleeve must not manufacture a kill-switch breach."""
+    journal = JournalManager("agent_1", session_dir=tmp_path)
+    journal.record_snapshot(
+        total_pnl=1.00, total_volume=54, open_count=2, position_size=54
+    )
+    journal.record_snapshot(
+        total_pnl=-4.00, total_volume=54, open_count=1, position_size=34
+    )
+
+    # $5 drawdown on the session's $54 peak deployed capital, not the shrunken
+    # $34 still open after one sleeve was liquidated.
+    assert journal.get_drawdown_pct() == pytest.approx(5 / 54 * 100)
+
+
 def test_lp_executor_amount_uses_current_position_value():
     row = _executor_row(
         {

@@ -17,6 +17,29 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+def _is_solana_spot_recovery_sell(input_data: dict[str, Any] | None) -> bool:
+    """Return whether a create liquidates an existing Solana spot balance.
+
+    ``order_executor.amount`` is denominated in base units.  Treating 868 XST
+    as $868 of new exposure both blocks the recovery and strands the token.
+    Solana spot cannot open a short, so a SELL can only reduce wallet exposure.
+    """
+    if not input_data or input_data.get("action") != "create":
+        return False
+    config = input_data.get("executor_config") or {}
+    executor_type = (
+        input_data.get("executor_type")
+        or config.get("type")
+        or config.get("executor_type")
+    )
+    side = config.get("side")
+    is_sell = side == 2 or str(side).upper() == "SELL"
+    connector = str(config.get("connector_name") or "").lower()
+    return executor_type == "order_executor" and is_sell and connector.startswith(
+        "solana-"
+    )
+
+
 @dataclass
 class RiskLimits:
     max_position_size_quote: float = 500.0
@@ -171,6 +194,13 @@ class RiskEngine:
         if action != "create":
             return True, ""
 
+        # A Solana spot SELL cannot create a short. It liquidates an existing
+        # wallet balance and must remain possible even when ordinary entry
+        # limits are full or breached. Its raw ``amount`` is base units, not
+        # quote dollars, so it must not be accumulated as fresh exposure.
+        if _is_solana_spot_recovery_sell(input_data):
+            return True, ""
+
         # Check executor count
         if current_state.executor_count >= self.limits.max_open_executors:
             return (
@@ -288,6 +318,10 @@ def auto_approve_with_risk_check(
         action = input_data.get("action") if input_data is not None else None
         is_exit = (
             (tool_name == "manage_executors" and action == "stop")
+            or (
+                tool_name == "manage_executors"
+                and _is_solana_spot_recovery_sell(input_data)
+            )
             or (tool_name == "manage_gateway_clmm" and action == "close_position")
             or (tool_name == "manage_bots" and action in {"stop", "stop_bot", "stop_controllers"})
         )

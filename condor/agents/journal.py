@@ -981,7 +981,14 @@ class JournalManager:
         drawdown = peak - current
         if drawdown <= 0:
             return 0.0
-        exposure = snapshots[-1].get("exposure", 0.0)
+        current_exposure = snapshots[-1].get("exposure", 0.0)
+        if current_exposure <= 0:
+            return 0.0
+        # Use the session's peak deployed capital as the denominator. Dividing
+        # by only the sleeve still open after another sleeve closes makes the
+        # denominator collapse and can manufacture a kill-switch breach during
+        # an otherwise successful liquidation.
+        exposure = max(float(s.get("exposure", 0.0) or 0.0) for s in snapshots)
         if exposure <= 0:
             return 0.0
         return drawdown / exposure * 100
