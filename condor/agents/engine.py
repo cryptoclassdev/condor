@@ -122,8 +122,15 @@ class TickEngine:
         default=None, init=False, repr=False
     )
     _outcome_hook: Any = field(default=None, init=False, repr=False)
+    _timeout_circuit: Any = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
+        from .timeout_circuit import TimeoutCircuit
+
+        self._timeout_circuit = TimeoutCircuit(
+            threshold=int(self.config.get("model_timeout_threshold", 2) or 2),
+            degraded_ticks=int(self.config.get("model_degraded_ticks", 2) or 2),
+        )
         # The journal/sessions/learnings hang off the *strategy* dir (one level
         # below the Agent), so each playbook keeps its own operational history
         # while the Agent's brain (memory/skills) stays shared at the parent.
@@ -444,23 +451,22 @@ class TickEngine:
         await self._adopt_running_bots(client)
 
         if not self.is_experiment:
-            from .host_outcomes import (
-                prepare as prepare_host_outcomes,
-                reconcile as reconcile_host_outcomes,
-            )
+            from .host_outcomes import before_prompt as before_prompt_host_outcomes
 
-            await reconcile_host_outcomes(
+            host_start = await before_prompt_host_outcomes(
                 self._outcome_hook,
                 client=client,
                 agent_id=self.agent_id,
                 tick=self.journal.tick_count + 1,
+                config=self.config,
             )
-            outcome_evidence_before = await prepare_host_outcomes(
-                self._outcome_hook,
-                client=client,
-                agent_id=self.agent_id,
-                tick=self.journal.tick_count + 1,
-            )
+            outcome_evidence_before = host_start["evidence"]
+            if host_start["stopped_executor_ids"]:
+                log.warning(
+                    "TickEngine %s: pre-prompt supervisor stopped %d executor(s)",
+                    self.agent_id,
+                    len(host_start["stopped_executor_ids"]),
+                )
         else:
             outcome_evidence_before = {}
 
@@ -606,30 +612,40 @@ class TickEngine:
             prompt += f"\n\nUSER DIRECTIVES (apply these on this tick):\n{directives}"
             self._pending_directives.clear()
 
-        # 6. Create a fresh agent client per tick (clean context window)
-        acp_client = await self._create_client(risk_state)
-        self._active_client = acp_client
-
         response_chunks: list[str] = []
         tool_calls: list[dict[str, Any]] = []
         tool_call_map: dict[str, dict[str, Any]] = {}
+        prompt_timed_out = False
+        acp_client = None
 
-        await acp_client.start()
-        try:
-            async with asyncio.timeout(300):
-                async for event in self._collect_stream(acp_client, prompt):
-                    if isinstance(event, TextChunk):
-                        response_chunks.append(event.text)
-                    elif isinstance(event, (ToolCallEvent, ToolCallUpdate)):
-                        new_tc = fold_tool_call_event(tool_call_map, event)
-                        if new_tc is not None:
-                            tool_calls.append(new_tc)
-        except asyncio.TimeoutError:
-            log.warning("TickEngine %s: ACP prompt timed out", self.agent_id)
-            response_chunks.append("(timed out)")
-        finally:
-            await acp_client.stop()
-            self._active_client = None
+        if self._timeout_circuit.should_attempt_model():
+            # 6. Create a fresh agent client per attempted tick (clean context window)
+            acp_client = await self._create_client(risk_state)
+            self._active_client = acp_client
+            await acp_client.start()
+            try:
+                timeout_sec = float(self.config.get("model_prompt_timeout_sec", 300))
+                async with asyncio.timeout(max(1.0, timeout_sec)):
+                    async for event in self._collect_stream(acp_client, prompt):
+                        if isinstance(event, TextChunk):
+                            response_chunks.append(event.text)
+                        elif isinstance(event, (ToolCallEvent, ToolCallUpdate)):
+                            new_tc = fold_tool_call_event(tool_call_map, event)
+                            if new_tc is not None:
+                                tool_calls.append(new_tc)
+                self._timeout_circuit.record_success()
+            except asyncio.TimeoutError:
+                log.warning("TickEngine %s: ACP prompt timed out", self.agent_id)
+                prompt_timed_out = True
+                self._timeout_circuit.record_timeout()
+                response_chunks.append("(timed out)")
+            finally:
+                await acp_client.stop()
+                self._active_client = None
+        else:
+            response_chunks.append(
+                "(degraded mode: model probe skipped; deterministic host safety ran)"
+            )
 
         # Claude's ACP bridge currently provides complete call arguments on the
         # permission request but may omit them from the session-update event.
@@ -644,7 +660,25 @@ class TickEngine:
         tick_duration = time.time() - self._last_tick_at
 
         if not self.is_experiment:
-            from .host_outcomes import capture as capture_host_outcomes
+            from .host_outcomes import (
+                capture as capture_host_outcomes,
+                supervise as supervise_host_outcomes,
+            )
+
+            if prompt_timed_out:
+                stopped = await supervise_host_outcomes(
+                    self._outcome_hook,
+                    client=client,
+                    agent_id=self.agent_id,
+                    tick=self.journal.tick_count + 1,
+                    config=self.config,
+                )
+                if stopped:
+                    log.warning(
+                        "TickEngine %s: timeout supervisor stopped %d executor(s)",
+                        self.agent_id,
+                        len(stopped),
+                    )
 
             await capture_host_outcomes(
                 self._outcome_hook,

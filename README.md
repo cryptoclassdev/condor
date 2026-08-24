@@ -25,8 +25,9 @@ The repository includes a chain-verified Meteora DLMM agent with regime-shaped l
 three risk sleeves, authoritative capital accounting, exact lifecycle deadlines, and
 bidirectional executor/on-chain reconciliation. See the
 [agent documentation](agents/meteora_regime_lp/README.md) and
-[judge quick start](hackathon/JUDGE_QUICKSTART.md). The copy-ready application is in the
-[hackathon submission draft](hackathon/submission.md).
+[judge quick start](hackathon/JUDGE_QUICKSTART.md). The portal-ready fields are in the
+[Botcamp form copy](hackathon/form-submission-copy.md), with the longer evidence narrative in
+the [hackathon submission draft](hackathon/submission.md).
 
 ## What you need
 

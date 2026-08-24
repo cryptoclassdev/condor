@@ -43,7 +43,7 @@ async def reconcile(
     if callback is None:
         return
     try:
-        async with asyncio.timeout(30):
+        async with asyncio.timeout(15):
             await callback(client=client, agent_id=agent_id, tick=tick)
     except TimeoutError:
         log.warning("Outcome reconciliation timed out for %s", agent_id)
@@ -63,7 +63,7 @@ async def prepare(
     if callback is None:
         return {}
     try:
-        async with asyncio.timeout(20):
+        async with asyncio.timeout(8):
             evidence = await callback(client=client, agent_id=agent_id, tick=tick)
         return evidence if isinstance(evidence, dict) else {}
     except TimeoutError:
@@ -98,3 +98,58 @@ async def capture(
         log.warning("Outcome capture timed out for %s tick %s", agent_id, tick)
     except Exception:
         log.exception("Outcome capture failed for %s tick %s", agent_id, tick)
+
+
+async def supervise(
+    module: ModuleType | None,
+    *,
+    client: Any,
+    agent_id: str,
+    tick: int,
+    config: dict[str, Any],
+) -> list[str]:
+    """Run an agent-local hard-safety hook independently of model work.
+
+    This hook is deliberately narrower than the reasoning loop: it may enforce
+    deterministic exits and reconcile authority, but it must never choose or
+    open a position.  Failure is fail-open for the host loop and loudly logged;
+    the next tick remains available for another authority read.
+    """
+    callback = getattr(module, "supervise", None) if module else None
+    if callback is None:
+        return []
+    try:
+        async with asyncio.timeout(30):
+            result = await callback(
+                client=client,
+                agent_id=agent_id,
+                tick=tick,
+                config=config,
+            )
+        return [str(value) for value in result] if isinstance(result, list) else []
+    except TimeoutError:
+        log.warning("Safety supervision timed out for %s tick %s", agent_id, tick)
+    except Exception:
+        log.exception("Safety supervision failed for %s tick %s", agent_id, tick)
+    return []
+
+
+async def before_prompt(
+    module: ModuleType | None,
+    *,
+    client: Any,
+    agent_id: str,
+    tick: int,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    """Run deterministic safety before any fallible model work."""
+    stopped = await supervise(
+        module,
+        client=client,
+        agent_id=agent_id,
+        tick=tick,
+        config=config,
+    )
+    await reconcile(module, client=client, agent_id=agent_id, tick=tick)
+    evidence = await prepare(module, client=client, agent_id=agent_id, tick=tick)
+    return {"stopped_executor_ids": stopped, "evidence": evidence}

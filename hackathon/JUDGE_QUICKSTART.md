@@ -31,6 +31,8 @@ The important files are:
 - `agents/meteora_regime_lp/routines/` — deterministic measurements and guards;
 - `agents/meteora_regime_lp/host_outcomes.py` — deterministic pre/post executor evidence
   adapter and durable pending reconciliation;
+- `agents/meteora_regime_lp/wallet_truth.py` — direct native SOL, legacy SPL and Token-2022
+  ownership adapter used for capital-critical wallet reads;
 - `hackathon/submission.md` — copy-ready application;
 - `hackathon/demo-script.md` — sub-three-minute recording plan.
 
@@ -63,6 +65,7 @@ session and repeats adoption.
 
 - On-chain positions and RUNNING LP executors reconcile, or the book fails closed.
 - Wallet and LP equity are valued in USD before sleeve and loss budgets are calculated.
+- Token-2022 proceeds cannot disappear behind a legacy-token-only portfolio cache.
 - Missing authority data is `UNKNOWN`, never zero or absent.
 - Every satellite or runner has a UTC deadline.
 - No scanner candidate means pause, never a forced entry.

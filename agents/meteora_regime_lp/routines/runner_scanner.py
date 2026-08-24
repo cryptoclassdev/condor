@@ -49,6 +49,7 @@ SOL_MINT = "So11111111111111111111111111111111111111112"
 GECKO_REQUEST_INTERVAL_SEC = 2.5
 GECKO_MAX_RETRIES = 2
 GECKO_RATE_LIMIT_CIRCUIT_THRESHOLD = 2
+_COOLDOWN_KEY = "_meteora_runner_scanner_rate_limit_until"
 
 
 class GeckoRateLimitError(RuntimeError):
@@ -82,6 +83,10 @@ class Config(BaseModel):
     scan_timeout_sec: float = Field(
         default=55.0,
         description="Hard wall-clock budget so discovery cannot delay safety supervision",
+    )
+    rate_limit_cooldown_sec: float = Field(
+        default=600.0,
+        description="Pause new Gecko requests after the provider-wide 429 circuit opens",
     )
     exclude_pools: list[str] = Field(
         default=[], description="Held/blocked pool addresses"
@@ -267,6 +272,21 @@ def source_coverage_prefix(*, successful: int, total: int) -> str:
 async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
     client = await get_client(context._chat_id, context=context)
 
+    user_data = getattr(context, "user_data", None)
+    if user_data is None:
+        user_data = getattr(context, "_user_data", None)
+    if user_data is None:
+        user_data = {}
+    now_epoch = datetime.now(timezone.utc).timestamp()
+    cooldown_until = float(user_data.get(_COOLDOWN_KEY, 0) or 0)
+    if cooldown_until > now_epoch:
+        remaining = cooldown_until - now_epoch
+        return (
+            f"runner_scanner: RATE-LIMIT COOLDOWN active for {remaining:.0f}s. "
+            "Runner sleeve must PAUSE; safety supervision continues and no "
+            "provider calls were made."
+        )
+
     raw = []
     try:
         async with asyncio.timeout(max(0.01, config.scan_timeout_sec)):
@@ -312,6 +332,10 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         return f"runner_scanner: failed to reach GeckoTerminal: {e}"
 
     total_sources = len(requests)
+    if circuit_open:
+        user_data[_COOLDOWN_KEY] = now_epoch + max(
+            1.0, config.rate_limit_cooldown_sec
+        )
     if successful_sources == 0:
         return (
             "runner_scanner: SOURCE UNAVAILABLE: 0/"

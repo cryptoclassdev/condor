@@ -55,6 +55,64 @@ class ExecutorsProvider(BaseProvider):
                 summary=f"Active Executors: failed to fetch ({e})",
             )
 
+        # Meteora sleeves may quote PnL, fees and deployed capital in either
+        # USDC or SOL.  Adding those raw fields produced a plausible-looking but
+        # dimensionally invalid dollar total.  Normalize from the wallet's own
+        # token prices; if a quote cannot be priced, keep the total explicitly
+        # unknown instead of inventing one.
+        normalized = None
+        portfolio_state = None
+        normalization_note = ""
+        if agent_id.startswith("meteora_regime_lp."):
+            from agents.meteora_regime_lp.performance import normalize_executor_book
+
+            try:
+                portfolio_state = await client.portfolio.get_state(refresh=False)
+            except Exception as exc:
+                portfolio_state = {}
+                normalization_note = (
+                    f"  ⚠️ USD performance UNKNOWN: wallet price read failed ({exc})."
+                )
+            normalized = normalize_executor_book(perf.executors, portfolio_state)
+            if normalized.known:
+                normalization_note = (
+                    "  ✓ USD-normalized across executor quote assets using wallet prices; "
+                    "raw SOL and USDC units were not added together."
+                )
+            elif not normalization_note:
+                normalization_note = (
+                    "  ⚠️ USD performance UNKNOWN; missing quote price(s): "
+                    + ", ".join(normalized.missing_quotes)
+                    + ". Raw incompatible units were not added."
+                )
+
+        pnl_known = normalized is None or normalized.known
+        realized_pnl = (
+            float(normalized.realized_pnl_usd or 0)
+            if normalized is not None and normalized.known
+            else perf.realized_pnl if normalized is None else 0.0
+        )
+        unrealized_pnl = (
+            float(normalized.unrealized_pnl_usd or 0)
+            if normalized is not None and normalized.known
+            else perf.unrealized_pnl if normalized is None else 0.0
+        )
+        total_pnl = (
+            float(normalized.total_pnl_usd or 0)
+            if normalized is not None and normalized.known
+            else perf.total_pnl if normalized is None else 0.0
+        )
+        total_volume = (
+            float(normalized.deployed_usd or 0)
+            if normalized is not None and normalized.known
+            else perf.volume if normalized is None else 0.0
+        )
+        total_fees = (
+            float(normalized.fees_usd or 0)
+            if normalized is not None and normalized.known
+            else perf.fees if normalized is None else 0.0
+        )
+
         running = [e for e in perf.executors if e["status"] == "RUNNING"]
 
         # Positions this session ADOPTED from an earlier session of the same
@@ -101,15 +159,22 @@ class ExecutorsProvider(BaseProvider):
         if perf.bot_names:
             lines.append(f"  Bots operated: {', '.join(perf.bot_names)}")
         fees_label = (
-            f"${perf.fees:+.4f}" if perf.fees_known else f"${perf.fees:+.4f} (incomplete)"
+            f"${total_fees:+.4f}"
+            if perf.fees_known
+            else f"${total_fees:+.4f} (incomplete)"
         )
-        lines.append(
-            f"  Realized: ${perf.realized_pnl:+.2f} | "
-            f"Unrealized: ${perf.unrealized_pnl:+.2f} | "
-            f"Total PnL: ${perf.total_pnl:+.2f} | "
-            f"Fees earned: {fees_label} | "
-            f"Volume/Deployed: ${perf.volume:,.0f}"
-        )
+        if pnl_known:
+            lines.append(
+                f"  Realized: ${realized_pnl:+.2f} | "
+                f"Unrealized: ${unrealized_pnl:+.2f} | "
+                f"Total PnL: ${total_pnl:+.2f} | "
+                f"Fees earned: {fees_label} | "
+                f"Volume/Deployed: ${total_volume:,.0f}"
+            )
+        else:
+            lines.append("  Realized / Unrealized / Total PnL: UNKNOWN (quote conversion unavailable)")
+        if normalization_note:
+            lines.append(normalization_note)
         if adopted:
             lines.append(
                 f"  ↩️ {len(adopted)} position(s) marked [ADOPTED] were opened by an earlier "
@@ -148,11 +213,9 @@ class ExecutorsProvider(BaseProvider):
         # position was being counted as if it were 24 cents. The cap was, in
         # effect, unenforced for every SOL-quoted sleeve.
         #
-        # There is no price feed at this layer, so this does not invent a
-        # conversion. It reports the breakdown, and takes the LARGEST single-quote
-        # exposure as the headline figure rather than a meaningless sum — an
-        # under-count on a risk limit is the dangerous direction, and a sum across
-        # incompatible units under-counts every non-headline currency.
+        # Meteora has a wallet-derived price feed above, so its exposure is
+        # normalized to USD too. Other strategies retain the conservative legacy
+        # fallback: largest single-quote bucket, never a meaningless raw sum.
         from condor.fetchers.executors import executor_quote
 
         by_quote: dict[str, float] = {}
@@ -160,26 +223,44 @@ class ExecutorsProvider(BaseProvider):
             q = executor_quote(r.get("pair", "")) or "?"
             by_quote[q] = by_quote.get(q, 0.0) + float(r.get("amount", 0) or 0)
         total_exposure = max(by_quote.values()) if by_quote else 0.0
+        exposure_known = True
+        if normalized is not None:
+            from agents.meteora_regime_lp.performance import normalize_executor_book
+
+            normalized_exposure = normalize_executor_book(running, portfolio_state)
+            exposure_known = normalized_exposure.known
+            if normalized_exposure.known:
+                total_exposure = float(normalized_exposure.deployed_usd or 0)
         if len(by_quote) > 1:
-            lines.append(
-                "  ⚠️ MIXED-QUOTE BOOK: "
-                + ", ".join(f"{v:,.4g} {q}" for q, v in sorted(by_quote.items()))
-                + ". These are different units and cannot be added. The risk engine's "
-                "position-size limit is enforced against the largest single-quote figure "
-                "only — treat per-entry sizing as YOUR responsibility, not the cap's."
-            )
+            if normalized is not None and exposure_known:
+                lines.append(
+                    "  MIXED-QUOTE EXPOSURE: "
+                    + ", ".join(f"{v:,.4g} {q}" for q, v in sorted(by_quote.items()))
+                    + f" = ${total_exposure:,.2f} after USD normalization."
+                )
+            else:
+                lines.append(
+                    "  ⚠️ MIXED-QUOTE BOOK: "
+                    + ", ".join(f"{v:,.4g} {q}" for q, v in sorted(by_quote.items()))
+                    + ". These are different units and cannot be added. The risk engine's "
+                    "position-size limit is enforced against the largest single-quote figure "
+                    "only — treat per-entry sizing as YOUR responsibility, not the cap's."
+                )
 
         return ProviderResult(
             name=self.name,
             data={
                 "executors": running,
                 "all_executors": perf.executors,
-                "total_pnl": perf.total_pnl,
-                "realized_pnl": perf.realized_pnl,
-                "unrealized_pnl": perf.unrealized_pnl,
-                "total_volume": perf.volume,
-                "total_fees": perf.fees,
+                "total_pnl": total_pnl,
+                "realized_pnl": realized_pnl,
+                "unrealized_pnl": unrealized_pnl,
+                "total_volume": total_volume,
+                "pnl_known": pnl_known,
+                "performance_by_quote": normalized.by_quote if normalized else {},
+                "total_fees": total_fees,
                 "total_exposure": total_exposure,
+                "exposure_known": exposure_known,
                 "exposure_by_quote": by_quote,
                 # Includes adopted rows: this is what the risk engine counts
                 # against max_open_executors, and a position you are responsible

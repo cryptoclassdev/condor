@@ -21,7 +21,8 @@ from Meteora and benchmarked against holding when the API exposes enough fields.
 Every minute the strategy runs:
 
 1. `orphan_guard` — reconcile RUNNING executors against on-chain owned positions.
-2. `wallet_audit` — inventory liquid quote and stranded base tokens.
+2. `wallet_audit` — read native SOL plus legacy SPL and Token-2022 accounts directly from
+   Solana, then inventory liquid quote and stranded base tokens.
 3. `capital_guard` — value wallet + chain positions in USD, apply gas/rent reserves, and
    cap sizing to actual equity.
 4. `lifecycle_guard` — enforce exact UTC deadlines, stop proximity, and material fill-change

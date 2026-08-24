@@ -19,6 +19,7 @@ from agents.meteora_regime_lp.capital_math import (
     build_spendable_quote_caps,
 )
 from config_manager import get_client
+from agents.meteora_regime_lp.wallet_truth import authoritative_wallet_state
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ class Config(BaseModel):
         description="Authority-read seed pools and their quote mints",
     )
     refresh: bool = True
+    rpc_url: str = ""
 
 
 def _num(value, default=0.0) -> float:
@@ -150,6 +152,18 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
     if not isinstance(state, dict):
         return "capital_guard: UNKNOWN — unexpected wallet payload. Pause new entries."
 
+    chain_verified = False
+    try:
+        chain_truth = await authoritative_wallet_state(client, rpc_url=config.rpc_url)
+    except Exception as exc:
+        return (
+            f"capital_guard: UNKNOWN — direct Solana wallet verification failed ({exc}). "
+            "Pause new entries; cached portfolio data can omit Token-2022 balances."
+        )
+    if chain_truth is not None:
+        state = chain_truth.state
+        chain_verified = True
+
     quote_symbols = {symbol.upper() for symbol in config.quote_tokens}
     wallet_total, liquid_quote, quote_values, prices = _wallet_metrics(
         state, quote_symbols
@@ -160,7 +174,7 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
     # $51.41 USDC; the next read seconds later returned both. A genuinely
     # single-quote wallet is accepted when a second read agrees. If token sets
     # differ, sizing pauses for the tick instead of trusting either snapshot.
-    if len(quote_values) == 1:
+    if len(quote_values) == 1 and not chain_verified:
         try:
             retry_state = await client.portfolio.get_state(refresh=config.refresh)
         except Exception as exc:

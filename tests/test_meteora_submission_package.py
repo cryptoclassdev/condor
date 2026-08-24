@@ -14,6 +14,8 @@ def test_judge_package_contains_every_required_artifact():
         / "agents/meteora_regime_lp/strategies/regime_lp_operator/strategy.md",
         "submission copy": ROOT / "hackathon/submission.md",
         "submission preview": ROOT / "hackathon/submission.html",
+        "portal form copy": ROOT / "hackathon/form-submission-copy.md",
+        "portal form preview": ROOT / "hackathon/form-submission-copy.html",
         "demo script": ROOT / "hackathon/demo-script.md",
         "judge quick start": ROOT / "hackathon/JUDGE_QUICKSTART.md",
         "readiness matrix": ROOT / "hackathon/SUBMISSION_READINESS.md",
@@ -62,8 +64,9 @@ def test_submission_preview_matches_current_rules_and_evidence():
     assert "40% Volume" in preview
     assert "40% P&amp;L" in preview
     assert "20% HBOT Vote" in preview
-    assert "$798.37" in preview
-    assert "-$2.80" in preview
+    assert "≈$2.71K" in preview
+    assert "-$4.07" in preview
+    assert "Token-2022" in preview
     assert "$77.30" not in preview
     assert "-$2.8245" not in preview
 

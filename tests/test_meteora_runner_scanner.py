@@ -152,3 +152,44 @@ def test_runner_scan_has_a_hard_wall_clock_budget(monkeypatch):
 
     assert "SOURCE TIMEOUT" in str(result)
     assert "Runner sleeve must PAUSE" in str(result)
+
+
+def test_rate_limit_circuit_cools_down_future_scans(monkeypatch):
+    async def fake_get_client(*_args, **_kwargs):
+        return None
+
+    calls = 0
+
+    async def rate_limited(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return [], 0, True
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    context = type("Context", (), {"_chat_id": 1, "user_data": {}})()
+    monkeypatch.setattr(runner_scanner, "get_client", fake_get_client)
+    monkeypatch.setattr(runner_scanner.aiohttp, "ClientSession", Session)
+    monkeypatch.setattr(runner_scanner, "_fetch_gecko_feeds", rate_limited)
+
+    first = asyncio.run(
+        runner_scanner.run(
+            runner_scanner.Config(scan_timeout_sec=1, rate_limit_cooldown_sec=600),
+            context,
+        )
+    )
+    second = asyncio.run(
+        runner_scanner.run(
+            runner_scanner.Config(scan_timeout_sec=1, rate_limit_cooldown_sec=600),
+            context,
+        )
+    )
+
+    assert "SOURCE UNAVAILABLE" in str(first)
+    assert "RATE-LIMIT COOLDOWN" in str(second)
+    assert calls == 1

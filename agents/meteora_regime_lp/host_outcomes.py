@@ -13,6 +13,7 @@ import asyncio
 import json
 import re
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -21,11 +22,15 @@ from agents.meteora_regime_lp.outcome_learning import (
     OutcomeLearner,
     PositionAttempt,
 )
+from agents.meteora_regime_lp.lifecycle import evaluate_lifecycle
 
 STORE_ROOT = Path(__file__).resolve().parent / "store" / "outcome_learning"
 PENDING_PATH = STORE_ROOT / "pending.json"
+EQUITY_ROOT = Path(__file__).resolve().parent / "store" / "equity"
+SLEEVES_PATH = STORE_ROOT / "sleeves.json"
 MAX_RECONCILIATIONS_PER_TICK = 2
-RECONCILIATION_ATTEMPT_TIMEOUT_SEC = 10
+RECONCILIATION_ATTEMPT_TIMEOUT_SEC = 6
+PREPARE_READ_TIMEOUT_SEC = 3
 
 _POOL_KEYS = ("pool_address", "pool", "pool_id", "poolAddress")
 _POSITION_KEYS = (
@@ -89,6 +94,45 @@ def pending_pool(pool_address: str, pending_path: Path | None = None) -> bool:
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         # An unreadable pending ledger is uncertainty, never permission.
         return True
+
+
+def _load_sleeves() -> dict[str, str]:
+    try:
+        payload = json.loads(SLEEVES_PATH.read_text(encoding="utf-8"))
+        return {
+            str(executor_id): str(sleeve)
+            for executor_id, sleeve in payload.get("executors", {}).items()
+            if executor_id and sleeve
+        }
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return {}
+
+
+def _save_sleeves(sleeves: dict[str, str]) -> None:
+    SLEEVES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = SLEEVES_PATH.with_suffix(".json.tmp")
+    temporary.write_text(
+        json.dumps({"version": 1, "executors": sleeves}, indent=2, sort_keys=True)
+        + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(SLEEVES_PATH)
+
+
+def sleeve_for_executor(executor_id: str) -> str:
+    return _load_sleeves().get(executor_id, "")
+
+
+def _remember_sleeve(executor_id: str, sleeve: str) -> None:
+    if not executor_id or not sleeve:
+        return
+    sleeves = _load_sleeves()
+    sleeves[executor_id] = sleeve
+    # The map is only an identity adapter for live/recent executors, not an
+    # unbounded history ledger.
+    if len(sleeves) > 500:
+        sleeves = dict(list(sleeves.items())[-500:])
+    _save_sleeves(sleeves)
 
 
 def _walk(value: Any):
@@ -179,6 +223,10 @@ async def _executor_detail(client: Any, executor_id: str) -> dict[str, Any]:
 
 async def _wallet_total(client: Any) -> float:
     state = await client.portfolio.get_state(refresh=True)
+    return _wallet_total_from_state(state)
+
+
+def _wallet_total_from_state(state: Any) -> float:
     total = 0.0
     if not isinstance(state, dict):
         raise ValueError("portfolio state is not a mapping")
@@ -226,13 +274,170 @@ async def _running_for_agent(client: Any, agent_id: str) -> list[dict[str, Any]]
     return _rows(result)
 
 
+def _owned_by_session(row: dict[str, Any], agent_id: str) -> bool:
+    controller = str(
+        row.get("controller_id")
+        or (row.get("config") or {}).get("controller_id")
+        or ""
+    )
+    stem, separator, suffix = agent_id.rpartition("_")
+    prefix = f"{stem}_" if separator and suffix.isdigit() else ""
+    return controller == agent_id or bool(prefix and controller.startswith(prefix))
+
+
+async def _running_for_session(client: Any, agent_id: str) -> list[dict[str, Any]]:
+    result = await client.executors.search_executors(status="RUNNING", limit=50)
+    return [row for row in _rows(result) if _owned_by_session(row, agent_id)]
+
+
+async def supervise(
+    *,
+    client: Any,
+    agent_id: str,
+    tick: int,
+    config: dict[str, Any],
+    now: datetime | str | None = None,
+) -> list[str]:
+    """Enforce pre-approved lifecycle exits when the model cannot answer.
+
+    The supervisor cannot create positions or adjust policy.  It reads the
+    current executor book, evaluates the same pure lifecycle rules used by the
+    routine, and stops only session-owned LP executors with ``EXIT_NOW``.  Each
+    stop is written to the pending authority ledger for next-tick verification.
+    """
+    response = await client.executors.search_executors(status="RUNNING", limit=50)
+    executors = [
+        row
+        for row in _rows(response)
+        if _owned_by_session(row, agent_id)
+        and str(row.get("executor_type") or row.get("type") or "") == "lp_executor"
+    ]
+    if not executors:
+        return []
+
+    instant = now
+    if isinstance(instant, str):
+        instant = datetime.fromisoformat(instant.replace("Z", "+00:00"))
+    if instant is None:
+        instant = datetime.now(timezone.utc)
+    instant = instant.replace(tzinfo=instant.tzinfo or timezone.utc).astimezone(
+        timezone.utc
+    )
+
+    runner_ids: list[str] = []
+    micro_ids: list[str] = []
+    for row in executors:
+        executor_id = _executor_id(row)
+        custom = row.get("custom_info") or {}
+        sleeve = str(
+            custom.get("sleeve") or sleeve_for_executor(executor_id) or ""
+        ).lower()
+        if sleeve == "runner_micro":
+            micro_ids.append(executor_id)
+        elif sleeve == "runner":
+            runner_ids.append(executor_id)
+
+    satellite = config.get("satellite") or {}
+    runner = config.get("runner") or {}
+    micro = config.get("quick_in_out") or {}
+    rows, _ = evaluate_lifecycle(
+        executors,
+        now=instant,
+        previous_state={},
+        satellite_max_hold_min=float(satellite.get("max_hold_min", 120)),
+        runner_max_hold_min=float(runner.get("max_hold_min", 90)),
+        satellite_stop_loss_pct=float(config.get("stop_loss_pct", 8)),
+        runner_stop_loss_pct=float(runner.get("stop_loss_pct", 6)),
+        runner_executor_ids=runner_ids,
+        micro_runner_executor_ids=micro_ids,
+        micro_runner_max_hold_min=float(micro.get("max_hold_min", 15)),
+        micro_runner_stop_loss_pct=float(micro.get("stop_loss_pct", 3)),
+        micro_runner_take_profit_pct=float(micro.get("take_profit_pct", 5)),
+        out_of_range_max_sec=float(config.get("out_of_range_max_sec", 1800)),
+        out_of_range_buffer_pct=float(config.get("out_of_range_buffer_pct", 0.5)),
+        rebalance_cooldown_sec=float(config.get("rebalance_cooldown_sec", 900)),
+    )
+    urgent = {row.executor: row for row in rows if row.action == "EXIT_NOW"}
+    if not urgent:
+        return []
+
+    # A hard exit must not wait on a slow/unavailable portfolio endpoint. Chain
+    # absence is authoritative for close reconciliation; wallet proceeds are a
+    # useful later observation, not a prerequisite for stopping risk.
+    wallet_before = None
+    pending = _load_pending()
+    pending_executor_ids = {item.executor_id for item in pending}
+    stopped: list[str] = []
+    by_id = {_executor_id(row): row for row in executors}
+    for executor_id, lifecycle in urgent.items():
+        if executor_id in pending_executor_ids:
+            continue
+        await client.executors.stop_executor(
+            executor_id=executor_id, keep_position=False
+        )
+        source = by_id[executor_id]
+        custom = source.get("custom_info") or {}
+        pending.append(
+            PendingAttempt(
+                attempt_id=f"host:{agent_id}:{tick}:timeout-close:{executor_id}",
+                action="close",
+                pool_address=_pick(source, _POOL_KEYS),
+                sleeve=lifecycle.sleeve,
+                executor_id=executor_id,
+                executor_status="SUCCESS",
+                wallet_before_usd=wallet_before,
+                position_address=_pick(custom, _POSITION_KEYS),
+                error_message="",
+                observed_tick=tick,
+                exit_reason=",".join(lifecycle.reasons),
+                pnl_pct=lifecycle.pnl_pct,
+            )
+        )
+        stopped.append(executor_id)
+    if stopped:
+        _save_pending(pending)
+    return stopped
+
+
 async def prepare(*, client: Any, agent_id: str, tick: int) -> dict[str, Any]:
     """Record authority baselines before the model can submit an action."""
-    del tick
-    running = await _running_for_agent(client, agent_id)
+    from agents.meteora_regime_lp.equity_ledger import (
+        build_equity_snapshot,
+        record_equity_snapshot,
+    )
+
+    running_result, portfolio_result = await asyncio.gather(
+        asyncio.wait_for(
+            _running_for_session(client, agent_id),
+            timeout=PREPARE_READ_TIMEOUT_SEC,
+        ),
+        asyncio.wait_for(
+            client.portfolio.get_state(refresh=True),
+            timeout=PREPARE_READ_TIMEOUT_SEC,
+        ),
+        return_exceptions=True,
+    )
+    running = running_result if isinstance(running_result, list) else []
+    executor_ids = sorted(filter(None, map(_executor_id, running)))
+    if isinstance(portfolio_result, BaseException):
+        return {
+            "wallet_before_usd": None,
+            "equity_before_usd": None,
+            "executor_ids_before": executor_ids,
+        }
+    portfolio_state = portfolio_result
+    snapshot = build_equity_snapshot(
+        agent_id=agent_id,
+        tick=tick,
+        portfolio_state=portfolio_state,
+        executors=running,
+    )
+    safe_agent_id = re.sub(r"[^A-Za-z0-9_.-]", "_", agent_id)
+    record_equity_snapshot(EQUITY_ROOT / f"{safe_agent_id}.jsonl", snapshot)
     return {
-        "wallet_before_usd": await _wallet_total(client),
-        "executor_ids_before": sorted(filter(None, map(_executor_id, running))),
+        "wallet_before_usd": _wallet_total_from_state(portfolio_state),
+        "equity_before_usd": snapshot.equity_usd,
+        "executor_ids_before": executor_ids,
     }
 
 
@@ -266,6 +471,70 @@ def _chain_found(
     return None if addresses else False
 
 
+def _event_time(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    try:
+        if isinstance(value, (int, float)) or str(value).replace(".", "", 1).isdigit():
+            seconds = float(value)
+            if seconds > 1e11:
+                seconds /= 1000
+            return datetime.fromtimestamp(seconds, tz=timezone.utc)
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=parsed.tzinfo or timezone.utc).astimezone(
+            timezone.utc
+        )
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def _has_newer_owned_successor(
+    pending: PendingAttempt,
+    detail: dict[str, Any],
+    owned: list[dict[str, Any]],
+    running: list[dict[str, Any]],
+) -> bool:
+    """Prove an ambiguous same-pool row belongs to a replacement executor.
+
+    Some historical executor records omitted their position address.  A pool
+    can meanwhile be re-entered, so pool occupancy alone cannot keep the old
+    close pending forever.  We accept only a strong temporal + identity match:
+    the old executor is terminal, the replacement was created after its close,
+    and the replacement's position address is present in chain authority rows.
+    """
+    if pending.action != "close" or pending.position_address:
+        return False
+    if str(detail.get("status") or "").upper() not in {
+        "TERMINATED",
+        "CLOSED",
+        "STOPPED",
+    }:
+        return False
+    closed_at = _event_time(
+        detail.get("close_timestamp")
+        or detail.get("closed_at")
+        or detail.get("close_time")
+    )
+    if closed_at is None:
+        return False
+    owned_addresses = {_pick(row, _POSITION_KEYS) for row in owned}
+    owned_addresses.discard("")
+    for row in running:
+        if _executor_id(row) == pending.executor_id:
+            continue
+        if _pick(row, _POOL_KEYS) != pending.pool_address:
+            continue
+        created_at = _event_time(
+            row.get("created_at")
+            or row.get("timestamp")
+            or (row.get("config") or {}).get("timestamp")
+        )
+        position = _pick(row.get("custom_info") or row, _POSITION_KEYS)
+        if created_at and created_at > closed_at and position in owned_addresses:
+            return True
+    return False
+
+
 async def reconcile(*, client: Any, agent_id: str, tick: int) -> None:
     pending = _load_pending()
     current_prefix = f"host:{agent_id}:"
@@ -278,7 +547,7 @@ async def reconcile(*, client: Any, agent_id: str, tick: int) -> None:
     if not due:
         return
 
-    wallet_now = await asyncio.wait_for(_wallet_total(client), timeout=5)
+    wallet_now: float | None = None
     store = FileLearningStore(STORE_ROOT)
     state = store.load_state()
     remaining = [
@@ -292,9 +561,14 @@ async def reconcile(*, client: Any, agent_id: str, tick: int) -> None:
     # the rest of the append-only reconciliation queue.
     remaining.extend(due[MAX_RECONCILIATIONS_PER_TICK:])
 
+    running_now: list[dict[str, Any]] | None = None
     for item in selected:
         try:
             async with asyncio.timeout(RECONCILIATION_ATTEMPT_TIMEOUT_SEC):
+                same_session = item.attempt_id.startswith(current_prefix)
+                confirmation_age = (
+                    tick - item.observed_tick if same_session else tick
+                )
                 detail = await _executor_detail(client, item.executor_id)
                 pool = item.pool_address or _pick(detail, _POOL_KEYS)
                 if not pool:
@@ -302,11 +576,40 @@ async def reconcile(*, client: Any, agent_id: str, tick: int) -> None:
                     continue
                 owned = await _owned(client, pool)
                 found = _chain_found(item, detail, owned)
-                if found is None or item.wallet_before_usd is None:
+                detail_status = str(detail.get("status") or "").upper()
+                if found is None and item.action == "close":
+                    if running_now is None:
+                        running_now = await asyncio.wait_for(
+                            _running_for_session(client, agent_id), timeout=2
+                        )
+                    if _has_newer_owned_successor(
+                        item, detail, owned, running_now
+                    ):
+                        found = False
+                historical_terminal_create = (
+                    item.action == "create"
+                    and item.wallet_before_usd is None
+                    and detail_status in {"TERMINATED", "CLOSED", "STOPPED"}
+                    and confirmation_age >= 2
+                )
+                # Chain absence is authoritative for a close even when an older
+                # attempt predates wallet-baseline capture. Creates still need
+                # both authority and wallet movement before they can be called
+                # successful, except that an old terminal executor can be
+                # retired as historical (not learned as success or failure).
+                if found is None or (
+                    item.action == "create" and item.wallet_before_usd is None
+                    and not historical_terminal_create
+                ):
                     remaining.append(item)
                     continue
+                if item.wallet_before_usd is not None and wallet_now is None:
+                    wallet_now = await asyncio.wait_for(
+                        _wallet_total(client), timeout=3
+                    )
                 status = item.executor_status
-                detail_status = str(detail.get("status") or "").upper()
+                if not item.executor_id and not detail:
+                    status = "UNKNOWN"
                 # A completed stop normally reads TERMINATED on the following tick.
                 # Preserve the observed SUCCESS and let chain ownership distinguish
                 # a confirmed close from the known false-success orphan case.
@@ -323,9 +626,14 @@ async def reconcile(*, client: Any, agent_id: str, tick: int) -> None:
                     sleeve=item.sleeve,
                     executor_status=status,
                     chain_position_found=found,
-                    wallet_delta_usd=wallet_now - item.wallet_before_usd,
+                    wallet_delta_usd=(
+                        wallet_now - item.wallet_before_usd
+                        if item.wallet_before_usd is not None
+                        and wallet_now is not None
+                        else None
+                    ),
                     error_message=item.error_message,
-                    confirmation_age_ticks=tick - item.observed_tick,
+                    confirmation_age_ticks=confirmation_age,
                     exit_reason=item.exit_reason,
                     pnl_pct=item.pnl_pct,
                     vs_hodl_pct=item.vs_hodl_pct,
@@ -403,12 +711,15 @@ async def capture(
         attempt_id = f"host:{agent_id}:{tick}:{call.get('id') or index}"
         if attempt_id in known:
             continue
+        sleeve = _sleeve(call_input)
+        if raw_action == "create" and executor_id:
+            _remember_sleeve(executor_id, sleeve)
         pending.append(
             PendingAttempt(
                 attempt_id=attempt_id,
                 action=action,
                 pool_address=pool,
-                sleeve=_sleeve(call_input),
+                sleeve=sleeve,
                 executor_id=executor_id,
                 executor_status=executor_status,
                 wallet_before_usd=wallet_before,

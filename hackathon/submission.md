@@ -138,26 +138,25 @@ flowchart LR
 
 ## Evidence snapshot
 
-Meteora lifetime figures below were captured on **20 August 2026 around 21:45 UTC**. The live
-operational snapshot was reconciled on **21 August 2026 around 18:51 UTC**. Values change with
+Meteora lifetime figures below were captured on **24 August 2026**. The live operational
+snapshot was reconciled on **24 August 2026 around 10:18 UTC**. Values change with
 the market and are not promised returns.
 
 | Evidence | Observed |
 |---|---:|
-| Meteora all-time deposits | $798.37 |
-| Meteora fees claimed | $8.58 |
-| Meteora total P&L | **-$2.80 (-0.35%)** |
-| Meteora average invested | $22.18 |
-| Meteora win rate | 61.11% |
-| Biggest completed win | $1.27 (+6.35%) |
-| Latest audited wallet | $78.49 liquid, no stranded inventory |
-| Latest observed total equity | $128.36 |
-| Latest chain/executor snapshot | 2 positions / 2 executors; 0 orphans / 0 ghosts |
+| Meteora all-time deposits | approximately $2.71K |
+| Meteora fees claimed | $21.78 |
+| Meteora total P&L | **-$4.07 (-0.15%)** |
+| Meteora win rate | 65.93% |
+| Biggest completed win | $3.82 |
+| Latest direct-chain wallet | approximately $108.6, including $32.94 stranded CATE/MADE |
+| Latest observed total equity | approximately $142.6 |
+| Latest chain/executor snapshot | 1 position / 1 executor; 0 orphans / 0 ghosts |
 
-The current core and satellite positions were healthy and reconciled at the snapshot. Earlier
-in the same session the agent held through failed create attempts rather than count them as
-exposure or retry indefinitely; it also recovered a real false-success orphan after a second
-on-chain sighting.
+The current core position was healthy and reconciled at the snapshot. The direct wallet adapter
+also exposed Token-2022 proceeds that the cached portfolio endpoint omitted; the agent classified
+them as unmanaged stranded inventory, notified the operator, and did not count them as spendable
+quote capital.
 
 ## Technical stack
 

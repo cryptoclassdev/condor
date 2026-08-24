@@ -517,6 +517,49 @@ class OutcomeLearner:
 
         if (
             attempt.action == "create"
+            and status in {"TERMINATED", "CLOSED", "STOPPED"}
+            and attempt.confirmation_age_ticks >= 2
+            and attempt.chain_position_found is False
+            and attempt.wallet_delta_usd is None
+        ):
+            outcome = "HISTORICAL_CREATE_TERMINATED"
+            gates = dict(state.pool_gates)
+            gates.pop(attempt.pool_address, None)
+            return LearningResult(
+                outcome=outcome,
+                retry_allowed=False,
+                next_action="NOOP",
+                explanation=(
+                    "This pre-ledger create now has a terminal executor and no "
+                    "on-chain position. Retire the stale reconciliation record "
+                    "without treating missing historical wallet data as a failure."
+                ),
+                state=self._count(state, outcome, pool_gates=gates),
+            )
+
+        if (
+            attempt.action == "create"
+            and status in {"", "UNKNOWN"}
+            and attempt.confirmation_age_ticks >= 10
+            and attempt.chain_position_found is False
+        ):
+            outcome = "STALE_UNIDENTIFIED_CREATE"
+            gates = dict(state.pool_gates)
+            gates.pop(attempt.pool_address, None)
+            return LearningResult(
+                outcome=outcome,
+                retry_allowed=False,
+                next_action="NOOP",
+                explanation=(
+                    "This pre-ledger create has no executor or position identity, "
+                    "and a much later authority read owns nothing in the pool. "
+                    "Retire the stale gate without guessing whether it once filled."
+                ),
+                state=self._count(state, outcome, pool_gates=gates),
+            )
+
+        if (
+            attempt.action == "create"
             and status in {"RUNNING", "SUCCESS", "COMPLETED"}
             and attempt.confirmation_age_ticks == 0
             and attempt.chain_position_found is False

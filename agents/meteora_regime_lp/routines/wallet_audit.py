@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 from telegram.ext import ContextTypes
 
 from config_manager import get_client
+from agents.meteora_regime_lp.wallet_truth import authoritative_wallet_state
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,9 @@ class Config(BaseModel):
     )
     account_name: str = Field(
         default="", description="Restrict to one account (blank = all)"
+    )
+    rpc_url: str = Field(
+        default="", description="Solana RPC override for direct wallet ownership checks"
     )
 
 
@@ -90,6 +94,17 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
             f"UNKNOWN this tick, not empty. Do not conclude anything is missing, and do "
             f"not size an entry off the last known figure."
         )
+
+    try:
+        chain_truth = await authoritative_wallet_state(client, rpc_url=config.rpc_url)
+    except Exception as e:
+        return (
+            f"wallet_audit: FAILED direct Solana wallet verification ({e}). Treat the "
+            "wallet as UNKNOWN this tick; the cached portfolio endpoint may omit USDC or "
+            "SPL Token-2022 inventory."
+        )
+    if chain_truth is not None:
+        state = chain_truth.state
 
     quotes = {q.strip().upper() for q in config.quote_tokens}
     rows, liquid_quote, stranded = [], 0.0, 0.0

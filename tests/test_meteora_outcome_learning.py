@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from agents.meteora_regime_lp.outcome_learning import (
+    AdaptivePolicy,
     FileLearningStore,
     LearningState,
     OutcomeLearner,
@@ -453,3 +454,46 @@ def test_unexplained_underperformance_gets_short_diagnostic_cooldown():
     assert result.state.pool_gates[
         "pool-underperformance"
     ].release_after_tick == 615
+
+
+def test_stale_terminated_create_is_retired_without_adapting_policy():
+    result = OutcomeLearner().observe(
+        PositionAttempt(
+            attempt_id="historical-create",
+            action="create",
+            pool_address="pool-historical",
+            sleeve="satellite",
+            executor_status="TERMINATED",
+            chain_position_found=False,
+            wallet_delta_usd=None,
+            confirmation_age_ticks=20,
+            observed_tick=700,
+        ),
+        LearningState(),
+    )
+
+    assert result.outcome == "HISTORICAL_CREATE_TERMINATED"
+    assert result.next_action == "NOOP"
+    assert result.state.policy == AdaptivePolicy()
+    assert "pool-historical" not in result.state.pool_gates
+
+
+def test_stale_unidentified_create_is_retired_only_after_chain_absence():
+    result = OutcomeLearner().observe(
+        PositionAttempt(
+            attempt_id="unidentified-create",
+            action="create",
+            pool_address="pool-unidentified",
+            sleeve="satellite",
+            executor_status="UNKNOWN",
+            chain_position_found=False,
+            wallet_delta_usd=25.0,
+            confirmation_age_ticks=20,
+            observed_tick=701,
+        ),
+        LearningState(),
+    )
+
+    assert result.outcome == "STALE_UNIDENTIFIED_CREATE"
+    assert result.next_action == "NOOP"
+    assert result.state.policy == AdaptivePolicy()

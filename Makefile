@@ -123,8 +123,13 @@ verify-meteora:
 		tests/test_meteora_lifecycle_guard.py \
 		tests/test_meteora_orphan_guard.py \
 		tests/test_meteora_runner_scanner.py \
+		tests/test_meteora_wallet_truth.py \
+		tests/test_meteora_equity_ledger.py \
+		tests/test_meteora_performance.py \
 		tests/test_meteora_outcome_learning.py \
 		tests/test_meteora_host_outcomes.py \
+		tests/test_host_outcomes_supervision.py \
+		tests/test_agent_timeout_circuit.py \
 		tests/test_meteora_quick_in_out.py \
 		tests/test_meteora_hedge_plan.py \
 		tests/test_meteora_submission_package.py \
