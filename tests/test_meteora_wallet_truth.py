@@ -1,3 +1,6 @@
+import asyncio
+from types import SimpleNamespace
+
 import pytest
 
 from agents.meteora_regime_lp.wallet_truth import (
@@ -6,6 +9,7 @@ from agents.meteora_regime_lp.wallet_truth import (
     _parse_holdings,
     _parse_prices,
     build_wallet_state,
+    authoritative_wallet_state,
 )
 
 
@@ -69,3 +73,74 @@ def test_wallet_truth_parses_gecko_multi_response():
     )
 
     assert prices == {"cate_mint": ("CATE", 0.041)}
+
+
+def test_wallet_truth_prefers_configured_gateway_rpc(monkeypatch):
+    observed = {}
+    monkeypatch.delenv("SOLANA_RPC_URL", raising=False)
+    monkeypatch.delenv("RPC_URL", raising=False)
+
+    class Accounts:
+        async def list_gateway_wallets(self):
+            return [
+                {
+                    "chain": "solana",
+                    "default_address": "wallet_address",
+                    "walletAddresses": ["wallet_address"],
+                }
+            ]
+
+    class Gateway:
+        async def get_network_config(self, network):
+            assert network == "solana-mainnet-beta"
+            return {"node_url": "https://private-rpc.invalid"}
+
+    async def fake_rpc(session, url, method, params):
+        observed.setdefault("urls", set()).add(url)
+        if method == "getBalance":
+            return {"value": 250_000_000}
+        return {"value": []}
+
+    class Response:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def json(self):
+            return {
+                "data": [
+                    {
+                        "id": f"solana_{SOL_MINT}",
+                        "attributes": {"symbol": "SOL", "price_usd": "100"},
+                    }
+                ]
+            }
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        def get(self, *args, **kwargs):
+            return Response()
+
+    monkeypatch.setattr("agents.meteora_regime_lp.wallet_truth._rpc", fake_rpc)
+    monkeypatch.setattr(
+        "agents.meteora_regime_lp.wallet_truth.aiohttp.ClientSession", Session
+    )
+    monkeypatch.setattr("agents.meteora_regime_lp.wallet_truth._CACHE", {})
+
+    truth = asyncio.run(
+        authoritative_wallet_state(
+            SimpleNamespace(accounts=Accounts(), gateway=Gateway())
+        )
+    )
+
+    assert truth is not None
+    assert observed["urls"] == {"https://private-rpc.invalid"}

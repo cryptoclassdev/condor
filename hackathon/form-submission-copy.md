@@ -80,7 +80,7 @@ The agent has been exercised with real Meteora positions on Solana mainnet. That
 two upstream DLMM close-path defects, partial wallet reads, stale position-cache rows and
 rate-limit failure modes, and a portfolio cache that omitted Token-2022 balances, all of which
 became recovery logic and regression tests. It has also proven restart-on-boot adoption of live
-positions without duplicate entries. The current suite passes 1,560 tests locally.
+positions without duplicate entries. The current suite passes 1,561 tests locally.
 
 For the 48-hour finals, the agent keeps pool volume, deposited capital and scored gross filled
 notional separate. It stops new entries with 135 minutes remaining, begins a verified wind-down

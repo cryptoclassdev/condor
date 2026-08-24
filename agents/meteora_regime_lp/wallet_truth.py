@@ -69,7 +69,7 @@ async def _rpc(
     session: aiohttp.ClientSession, url: str, method: str, params: list[Any]
 ) -> Any:
     last_error: Exception | None = None
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             async with session.post(
                 url,
@@ -86,8 +86,8 @@ async def _rpc(
             return payload.get("result")
         except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError) as exc:
             last_error = exc
-            if attempt == 0:
-                await asyncio.sleep(1)
+            if attempt < 2:
+                await asyncio.sleep(attempt + 1)
     raise last_error or RuntimeError(f"{method} failed")
 
 
@@ -173,6 +173,17 @@ async def authoritative_wallet_state(client: Any, *, rpc_url: str = "") -> Walle
         return None
     address = _wallet_address(await accounts.list_gateway_wallets())
     url = _rpc_url(rpc_url)
+    if url == PUBLIC_RPC:
+        gateway = getattr(client, "gateway", None)
+        if gateway is not None and hasattr(gateway, "get_network_config"):
+            try:
+                network = await gateway.get_network_config("solana-mainnet-beta")
+                configured_url = str((network or {}).get("node_url") or "").strip()
+                if configured_url:
+                    url = configured_url
+            except Exception:
+                # The direct wallet read still has bounded public-RPC retries below.
+                pass
     cache_key = f"{address}|{url}"
     cached = _CACHE.get(cache_key)
     now = time.monotonic()
