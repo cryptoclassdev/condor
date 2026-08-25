@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Regime LP Operator — Overnight Readiness Review</title>
+  <style>
+    :root { color-scheme: dark; --bg:#07100d; --panel:#102019; --text:#f4fbf7;
+      --muted:#a8bdb4; --line:#29463a; --good:#66f5b3; --warn:#ffc76b; }
+    * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--text);
+      font:16px/1.55 system-ui,sans-serif } main { width:min(980px,calc(100% - 32px));
+      margin:48px auto 80px } h1 { font-size:clamp(2.5rem,7vw,5rem); line-height:.95;
+      letter-spacing:-.05em; margin:0 0 18px } h2 { margin-top:40px } p { color:var(--muted) }
+    .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:20px }
+    .grade { color:var(--good); font-size:2rem; font-weight:800 } .resolved { color:var(--good) }
+    .pending { color:var(--warn) } code { color:#c8ffe7 } li+li { margin-top:8px }
+    @media(max-width:720px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body><main>
+  <p>25 August 2026 · pre-overnight review</p>
+  <h1>Autonomous LP lifecycle ready for the final soak.</h1>
+  <p>The project integrates existing Meteora DLMM and Hummingbot infrastructure; it deploys
+    no custom Solana program or custodial vault. Program-level signer, PDA, reinitialization,
+    and compute-unit findings are therefore not applicable. Client-side transaction safety,
+    capital accounting, lifecycle enforcement, and recovery remain in scope.</p>
+
+  <div class="grid">
+    <section class="card"><div>Security</div><div class="grade">B+</div><p>No open critical
+      finding. Mainnet readiness remains gated by credential rotation and live soak evidence.</p></section>
+    <section class="card"><div>Correctness</div><div class="grade">A−</div><p>1,601 repository
+      tests pass, including 187 judge-facing Meteora checks.</p></section>
+    <section class="card"><div>Quality</div><div class="grade">A−</div><p>Native discovery,
+      deterministic lifecycle exits, cleanup planning, and chain reconciliation are separated.</p></section>
+  </div>
+
+  <h2>Resolved in this iteration</h2>
+  <ul>
+    <li><span class="resolved">Resolved · Discovery:</span> <code>meteora_pool_scanner</code>
+      and <code>runner_scanner</code> now use the official Meteora DLMM Data API first.
+      GeckoTerminal remains an independent fallback with bounded failure behavior.</li>
+    <li><span class="resolved">Resolved · Profit lifecycle:</span> ordinary LPs now have
+      deterministic hard take-profit and armed trailing-profit exits in
+      <code>lifecycle.py</code>; the agent cannot silently forget those rules.</li>
+    <li><span class="resolved">Resolved · Inventory safety:</span> residual cleanup refuses to
+      sell any mint still referenced by a RUNNING LP and waits for a post-close wallet read.</li>
+    <li><span class="resolved">Resolved · Monitoring:</span> soak reconciliation recognizes the
+      live journal's “Guards clean (0 orphan/0 ghost)” wording, eliminating false alarms.</li>
+    <li><span class="resolved">Resolved · Packaging:</span> outcome-first submission copy,
+      judge setup, demo hook, and public HTML artifacts are aligned.</li>
+  </ul>
+
+  <h2>Remaining before final submission</h2>
+  <ul>
+    <li><span class="pending">Live proof:</span> complete the overnight fault-free soak on the
+      restarted code and capture the morning audit.</li>
+    <li><span class="pending">Media:</span> record and upload the sub-three-minute demo, then
+      replace the placeholder URL.</li>
+    <li><span class="pending">Credential:</span> revoke/reissue the Telegram bot token in
+      BotFather and install it with the hidden-input helper. This is external and cannot be
+      completed from the repository.</li>
+    <li><span class="pending">Capital reality:</span> three slots remain a funded target, not a
+      promise. If real reserve-adjusted equity cannot fund the $20 minimum plus rent for the
+      next slot, the agent must hold rather than manufacture activity.</li>
+  </ul>
+
+  <h2>Verification</h2>
+  <p><code>uv run pytest -q</code>: 1,601 passed. <code>make verify-meteora</code>: 187 backend
+    checks, 5 frontend tests, and the production frontend build passed.</p>
+</main></body></html>

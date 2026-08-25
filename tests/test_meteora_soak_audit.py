@@ -3,7 +3,9 @@ import json
 from scripts import meteora_soak_audit as soak
 
 
-def _session(tmp_path, *, tick=8, updated_at=1000.0, decision=None):
+def _session(
+    tmp_path, *, tick=8, updated_at=1000.0, decision=None, agent_response="healthy"
+):
     session = tmp_path / "session_8"
     snapshots = session / "snapshots"
     snapshots.mkdir(parents=True, exist_ok=True)
@@ -24,7 +26,7 @@ def _session(tmp_path, *, tick=8, updated_at=1000.0, decision=None):
         "## Risk State\n"
         "- Position Size: $100.23 / $500.00 limit\n"
         "- Status: ACTIVE\n\n"
-        "## Agent Response\nhealthy\n"
+        f"## Agent Response\n{agent_response}\n"
     )
     decision = decision or (
         "Reconcile clean (0 orphan/0 ghost/48 phantom). Wallet has no stranded "
@@ -63,6 +65,99 @@ def test_healthy_session_creates_baseline_soak_sample(tmp_path):
     assert result["pnl_usd"] == 0.02
     assert result["exposure_usd"] == 100.23
     assert len(log.read_text().splitlines()) == 1
+
+
+def test_compact_reconciliation_and_active_lp_dust_are_classified_correctly(tmp_path):
+    session = _session(
+        tmp_path,
+        decision=(
+            "reconcile clean (0 orphan/ghost, 48 phantom noise ignored). "
+            "Wallet: $31.16 liquid SOL + $0.08 stranded CATE (dust). "
+            "Cleanup WAIT — CATE LP still RUNNING."
+        ),
+    )
+
+    result = soak.audit(session, now=1010, pid_probe=lambda _pid: True)
+
+    statuses = _statuses(result)
+    assert statuses["reconciliation"] == "PASS"
+    assert statuses["wallet_inventory"] == "WARN"
+
+
+def test_zero_dollar_stranded_wording_is_clean_inventory(tmp_path):
+    session = _session(
+        tmp_path,
+        decision=(
+            "Reconcile clean (0 orphan/0 ghost). Wallet $32.84 liquid, "
+            "$0 stranded, cleanup CLEAN."
+        ),
+    )
+
+    result = soak.audit(session, now=1010, pid_probe=lambda _pid: True)
+
+    assert _statuses(result)["wallet_inventory"] == "PASS"
+
+
+def test_current_snapshot_response_supplies_reconciliation_and_inventory_evidence(
+    tmp_path,
+):
+    session = _session(
+        tmp_path,
+        decision="Opened a verified core position and recorded its three outcomes.",
+        agent_response=(
+            "Reconciliation clean: 0 orphans/ghosts, no stranded inventory, "
+            "both prior LP slots healthy."
+        ),
+    )
+
+    result = soak.audit(session, now=1010, pid_probe=lambda _pid: True)
+
+    statuses = _statuses(result)
+    assert statuses["reconciliation"] == "PASS"
+    assert statuses["wallet_inventory"] == "PASS"
+
+
+def test_orphan_guard_clean_wording_is_reconciliation_evidence(tmp_path):
+    session = _session(
+        tmp_path,
+        decision="Monitor only; all slots are full.",
+        agent_response=(
+            "orphan_guard: clean — 0 orphans, 0 ghosts, only phantom-cache noise. "
+            "Wallet has no stranded inventory."
+        ),
+    )
+
+    result = soak.audit(session, now=1010, pid_probe=lambda _pid: True)
+
+    assert _statuses(result)["reconciliation"] == "PASS"
+
+
+def test_guard_summary_wording_is_reconciliation_evidence(tmp_path):
+    session = _session(
+        tmp_path,
+        decision=(
+            "Guards clean (0 orphan/0 ghost/49 phantom-cache, $0 stranded). "
+            "Core remains healthy."
+        ),
+    )
+
+    result = soak.audit(session, now=1010, pid_probe=lambda _pid: True)
+
+    assert _statuses(result)["reconciliation"] == "PASS"
+
+
+def test_abbreviated_recon_wording_is_reconciliation_evidence(tmp_path):
+    session = _session(
+        tmp_path,
+        decision=(
+            "Recon clean: 0 orphans/ghosts (49 phantom-cache rows ignored). "
+            "Wallet has no stranded inventory."
+        ),
+    )
+
+    result = soak.audit(session, now=1010, pid_probe=lambda _pid: True)
+
+    assert _statuses(result)["reconciliation"] == "PASS"
 
 
 def test_second_sample_proves_tick_progress(tmp_path):

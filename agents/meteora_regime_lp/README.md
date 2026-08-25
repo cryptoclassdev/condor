@@ -1,12 +1,21 @@
 # Meteora Regime LP Operator
 
-An autonomous Meteora DLMM operator for Condor that separates the book into core,
-satellite, and runner sleeves while treating Solana chain state—not executor status or a
-position cache—as the source of truth.
+Deposit SOL, choose a risk profile, and let the agent run the LP portfolio. Regime LP
+Operator continuously searches Meteora, allocates capital across core, satellite, and runner
+strategies, manages ranges, protects gains, exits deteriorating positions, rebalances, and
+cleans residual inventory without requiring the user to operate each position.
+
+The experience is intentionally simple: **fund once, choose Guardian, Balanced, or Hunter,
+and start the loop**. Solana chain state—not an executor response or position cache—remains
+the source of truth behind every autonomous action.
 
 ## Why it exists
 
-An LP strategy can be directionally correct and still fail operationally. During live
+LP yield is not passive when a user must constantly compare pools, move ranges, watch token
+risk, collect proceeds, sell leftovers, and recover failed transactions. Regime LP Operator
+turns those recurring decisions into one continuously supervised portfolio loop.
+
+An LP strategy can also be directionally correct and still fail operationally. During live
 mainnet testing, we observed creates reported failed after landing on-chain, closes reported
 successful without sending a transaction, zero-proceeds close records, stale OPEN cache
 rows, base-token proceeds hidden from quote-only wallet views, and mixed-quote exposure
@@ -23,28 +32,34 @@ Every minute the strategy runs:
 1. `orphan_guard` — reconcile RUNNING executors against on-chain owned positions.
 2. `wallet_audit` — read native SOL plus legacy SPL and Token-2022 accounts directly from
    Solana, then inventory liquid quote and stranded base tokens.
-3. `capital_guard` — value wallet + chain positions in USD, apply gas/rent reserves, and
-   cap sizing to actual equity.
-4. `lifecycle_guard` — enforce exact UTC deadlines, stop proximity, and material fill-change
+3. `inventory_cleanup_guard` — plan at most one exact-mint residual-token sale into SOL;
+   preserve deployable stablecoin quote and require next-tick wallet verification.
+4. `capital_guard` — value wallet + chain positions in USD, apply gas/rent reserves, and
+   cap sizing to actual equity while reserving the minimum deposit and rent for every later
+   target slot.
+5. `lifecycle_guard` — enforce exact UTC deadlines, stop proximity, and material fill-change
    regime rechecks.
-5. `competition_guard` — during finals only, block late entries and start deterministic
+6. `competition_guard` — during finals only, block late entries and start deterministic
    wind-down before the organizer closes every remaining position.
 
 Condor's host observes every executor create/stop deterministically, stores it as pending, and
 reconciles it on a later tick against executor detail, Solana-owned positions, and wallet
 movement. The append-only event ledger survives restarts, and unresolved attempts block the
 same pool before the model can retry. Repeated failures may tune only bounded execution mechanics
-(funding haircut, range-width scale, and RPC backoff); portfolio risk controls are outside
+(funding haircut, range-width scale, RPC backoff, and contextual LP side). The tracked
+`baseline_policy.json` ships general lessons to every installation, while private verified
+side/regime results persist locally across restarts. Portfolio risk controls are outside
 the learner's interface and cannot be relaxed by it. Confirmed closes are attributed by
 exit reason; a hard-stop adds a 30-tick pool cooldown, and every later entry must pass the
 learner's persistent pool-gate check first.
 
 Every fifth tick it runs market discovery. `meteora_pool_scanner` serves core/satellites;
 `runner_scanner` independently searches young Meteora SOL pools with accelerating five-minute
-volume. Candidates still require a regime classification and token safety check. Runner
-discovery paces the public GeckoTerminal requests below its published limit, backs off on HTTP
-429, opens a provider circuit after two exhausted feeds, and labels partial source coverage so
-an upstream failure cannot be mistaken for a quiet market or monopolize a supervision tick.
+volume. Both now use Meteora's official DLMM Data API first. Core ranking uses native fee/TVL
+windows, while runner discovery enriches fresh pools with native 5m volume history. GeckoTerminal
+remains an independent fallback with bounded backoff and a provider circuit, so one indexer
+cannot silently disable discovery. Candidates still require regime classification and token
+safety checks, and partial source coverage can never be mistaken for a quiet market.
 
 ## Quick Start
 
@@ -170,9 +185,10 @@ make verify-meteora
 
 | Routine | Purpose |
 |---|---|
-| `capital_guard` | Authoritative effective equity, reserve-adjusted entry capacity, sleeve and loss budgets |
+| `capital_guard` | Authoritative equity and slot-ready entry capacity, including future-slot deposit/rent reserves, sleeve and loss budgets |
 | `competition_guard` | Finals entry cutoff and end-of-race wind-down clock |
 | `hedge_guard` | Read-only SOL inventory hedge target with stale-price, dust, credential, and real-equity caps |
+| `inventory_cleanup_guard` | Exact-mint, one-at-a-time residual inventory cleanup plan into SOL with duplicate protection |
 | `quick_in_out_guard` | Read-only hunter micro-entry/monitor gate for first-retracement flow |
 | `lifecycle_guard` | Exact max-hold deadlines, fill transitions, stop and recheck actions |
 | `orphan_guard` | Chain ↔ executor reconciliation, ghost/orphan handling, suspect-close detection |

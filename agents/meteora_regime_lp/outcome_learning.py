@@ -17,6 +17,53 @@ from typing import Literal
 
 
 Action = Literal["create", "close", "monitor"]
+BASELINE_POLICY_PATH = Path(__file__).with_name("baseline_policy.json")
+
+
+@dataclass(frozen=True)
+class BaselinePolicy:
+    version: int
+    inventory_heavy_ratio: float
+    minimum_verified_side_samples: int
+    minimum_outperformance_margin_pct: float
+    maximum_learned_bias: float
+
+
+def load_baseline_policy(path: Path = BASELINE_POLICY_PATH) -> BaselinePolicy:
+    """Load the tracked, wallet-agnostic policy shipped to every installation."""
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    policy = BaselinePolicy(**payload)
+    if policy.version != 1:
+        raise ValueError("unsupported baseline policy version")
+    if not 0.5 <= policy.inventory_heavy_ratio <= 0.9:
+        raise ValueError("unsafe inventory_heavy_ratio in baseline policy")
+    if policy.minimum_verified_side_samples < 3:
+        raise ValueError("side learning requires at least three verified samples")
+    if not 0 <= policy.maximum_learned_bias <= 0.20:
+        raise ValueError("maximum_learned_bias exceeds the bounded learning cap")
+    return policy
+
+
+@dataclass(frozen=True)
+class SideContext:
+    """Observable context used to choose an LP inventory direction."""
+
+    pool_address: str
+    sleeve: str
+    regime: str
+    base_asset: str
+    quote_asset: str
+    wallet_base_usd: float
+    wallet_quote_usd: float
+    trend_direction: str = ""
+
+
+@dataclass(frozen=True)
+class SideRecommendation:
+    side: int
+    placement: Literal["ABOVE", "BELOW", "CENTERED", "ABSTAIN"]
+    intent: str
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -34,6 +81,8 @@ class PositionAttempt:
     pnl_pct: float | None = None
     vs_hodl_pct: float | None = None
     observed_tick: int = 0
+    entry_side: int | None = None
+    entry_regime: str = ""
 
 
 @dataclass(frozen=True)
@@ -53,6 +102,19 @@ class AdaptivePolicy:
 
 
 @dataclass(frozen=True)
+class SidePerformance:
+    verified_samples: int = 0
+    cumulative_vs_hodl_pct: float = 0.0
+    beat_hodl_count: int = 0
+
+
+@dataclass(frozen=True)
+class ActiveSideContext:
+    entry_side: int
+    entry_regime: str
+
+
+@dataclass(frozen=True)
 class LearningState:
     outcome_counts: dict[str, int] = field(default_factory=dict)
     consecutive_outcome: str = ""
@@ -60,6 +122,10 @@ class LearningState:
     pool_gates: dict[str, PoolGate] = field(default_factory=dict)
     observation_versions: dict[str, int] = field(default_factory=dict)
     policy: AdaptivePolicy = field(default_factory=AdaptivePolicy)
+    side_performance: dict[str, SidePerformance] = field(default_factory=dict)
+    active_side_contexts: dict[str, ActiveSideContext] = field(
+        default_factory=dict
+    )
     last_adjustment: str = ""
 
 
@@ -115,6 +181,18 @@ class FileLearningStore:
                     ).items()
                 },
                 policy=AdaptivePolicy(**state.get("policy", {})),
+                side_performance={
+                    str(key): SidePerformance(**performance)
+                    for key, performance in state.get(
+                        "side_performance", {}
+                    ).items()
+                },
+                active_side_contexts={
+                    str(pool): ActiveSideContext(**context)
+                    for pool, context in state.get(
+                        "active_side_contexts", {}
+                    ).items()
+                },
                 last_adjustment=str(state.get("last_adjustment", "")),
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -150,6 +228,145 @@ class FileLearningStore:
 
 class OutcomeLearner:
     """Classify an observed attempt and return the safe next action."""
+
+    def __init__(self, baseline: BaselinePolicy | None = None):
+        self.baseline = baseline or load_baseline_policy()
+
+    def recommend_side(
+        self, context: SideContext, state: LearningState
+    ) -> SideRecommendation:
+        """Choose inventory direction without changing any hard risk limit."""
+        regime = self._normalized_regime(context)
+        total = max(0.0, context.wallet_base_usd) + max(
+            0.0, context.wallet_quote_usd
+        )
+        base_share = context.wallet_base_usd / total if total else 0.0
+        quote_share = context.wallet_quote_usd / total if total else 0.0
+
+        if context.sleeve == "core":
+            if regime in {"CHAOTIC", "HOT"}:
+                return SideRecommendation(
+                    side=0,
+                    placement="ABSTAIN",
+                    intent="DO_NOT_OPEN",
+                    reason="The core does not open in a chaotic or HOT regime.",
+                )
+            heavy = self.baseline.inventory_heavy_ratio
+            if regime in {"TRENDING_DOWN", "DOWN"} and quote_share < heavy:
+                return SideRecommendation(
+                    side=0,
+                    placement="ABSTAIN",
+                    intent="DO_NOT_OPEN",
+                    reason=(
+                        "Do not manufacture quote inventory by selling base into a "
+                        "downtrend; wait for a safer regime."
+                    ),
+                )
+            if base_share >= heavy and regime in {
+                "CALM",
+                "RANGING",
+                "TRENDING_UP",
+                "TRENDING",
+            }:
+                return self._apply_side_evidence(
+                    context,
+                    state,
+                    SideRecommendation(
+                        side=2,
+                        placement="ABOVE",
+                        intent="SELL_BASE_INTO_STRENGTH",
+                        reason=(
+                            "The core wallet is base-heavy in an uptrend; use existing "
+                            "base inventory above spot instead of swapping it to quote."
+                        ),
+                    ),
+                )
+            if quote_share >= heavy:
+                return self._apply_side_evidence(
+                    context,
+                    state,
+                    SideRecommendation(
+                        side=1,
+                        placement="BELOW",
+                        intent="BUY_BASE_ON_PULLBACK",
+                        reason=(
+                            "The core wallet is quote-heavy; use existing quote inventory "
+                            "below spot instead of swapping into base."
+                        ),
+                    ),
+                )
+            if regime in {"CALM", "RANGING"}:
+                return self._apply_side_evidence(
+                    context,
+                    state,
+                    SideRecommendation(
+                        side=3,
+                        placement="CENTERED",
+                        intent="MARKET_MAKE_BOTH_SIDES",
+                        reason=(
+                            "The core wallet is balanced and the regime is stable enough "
+                            "for centered two-sided liquidity."
+                        ),
+                    ),
+                )
+
+        return self._apply_side_evidence(
+            context,
+            state,
+            SideRecommendation(
+                side=1,
+                placement="BELOW",
+                intent="BUY_BASE_ON_PULLBACK",
+                reason="Use quote inventory below spot for a defensive pullback entry.",
+            ),
+        )
+
+    def _apply_side_evidence(
+        self,
+        context: SideContext,
+        state: LearningState,
+        recommendation: SideRecommendation,
+    ) -> SideRecommendation:
+        """Suspend a context only after repeated, verified HODL underperformance."""
+        regime = self._normalized_regime(context)
+        key = f"{context.sleeve}|{regime}|{recommendation.side}"
+        performance = state.side_performance.get(key)
+        if (
+            performance is None
+            or performance.verified_samples
+            < self.baseline.minimum_verified_side_samples
+        ):
+            return recommendation
+        average = (
+            performance.cumulative_vs_hodl_pct / performance.verified_samples
+        )
+        majority_beat_hodl = (
+            performance.beat_hodl_count * 2 >= performance.verified_samples
+        )
+        if (
+            average <= -self.baseline.minimum_outperformance_margin_pct
+            and not majority_beat_hodl
+        ):
+            return SideRecommendation(
+                side=0,
+                placement="ABSTAIN",
+                intent="DO_NOT_OPEN",
+                reason=(
+                    f"Side {recommendation.side} in {regime} underperformed HODL "
+                    f"by {average:.2f}% on average across "
+                    f"{performance.verified_samples} verified closes; suspend this "
+                    "context until reviewed or stronger evidence is recorded."
+                ),
+            )
+        return recommendation
+
+    @staticmethod
+    def _normalized_regime(context: SideContext) -> str:
+        regime = context.regime.strip().upper().replace(" ", "_")
+        direction = context.trend_direction.strip().upper()
+        if regime == "TRENDING" and direction in {"UP", "DOWN"}:
+            return f"TRENDING_{direction}"
+        return regime
 
     def entry_permission(
         self, pool_address: str, observed_tick: int, state: LearningState
@@ -202,6 +419,29 @@ class OutcomeLearner:
         self, attempt: PositionAttempt, state: LearningState
     ) -> LearningResult:
         status = attempt.executor_status.strip().upper()
+        if (
+            attempt.action == "close"
+            and status in {"COMPLETED", "CLOSED", "STOPPED", "SUCCESS"}
+            and attempt.chain_position_found is False
+        ):
+            active = state.active_side_contexts.get(attempt.pool_address)
+            if active is not None and (
+                attempt.entry_side is None or not attempt.entry_regime.strip()
+            ):
+                attempt = replace(
+                    attempt,
+                    entry_side=attempt.entry_side or active.entry_side,
+                    entry_regime=attempt.entry_regime or active.entry_regime,
+                )
+            state = self._record_side_performance(attempt, state)
+            if (
+                attempt.entry_side in {1, 2, 3}
+                and attempt.entry_regime.strip()
+                and attempt.vs_hodl_pct is not None
+            ):
+                active_contexts = dict(state.active_side_contexts)
+                active_contexts.pop(attempt.pool_address, None)
+                state = replace(state, active_side_contexts=active_contexts)
         wallet_moved = (
             attempt.wallet_delta_usd is not None
             and abs(attempt.wallet_delta_usd) >= 0.01
@@ -348,6 +588,7 @@ class OutcomeLearner:
             outcome = "CONFIRMED_SUCCESS"
             gates = dict(state.pool_gates)
             gates.pop(attempt.pool_address, None)
+            state = self._remember_active_side(attempt, state)
             return LearningResult(
                 outcome=outcome,
                 retry_allowed=False,
@@ -585,6 +826,47 @@ class OutcomeLearner:
             explanation="Outcome lacks enough authoritative evidence to retry safely.",
             state=self._count(state, outcome),
         )
+
+    @staticmethod
+    def _remember_active_side(
+        attempt: PositionAttempt, state: LearningState
+    ) -> LearningState:
+        if attempt.entry_side not in {1, 2, 3} or not attempt.entry_regime.strip():
+            return state
+        contexts = dict(state.active_side_contexts)
+        contexts[attempt.pool_address] = ActiveSideContext(
+            entry_side=attempt.entry_side,
+            entry_regime=attempt.entry_regime.strip().upper().replace(" ", "_"),
+        )
+        return replace(state, active_side_contexts=contexts)
+
+    @staticmethod
+    def _record_side_performance(
+        attempt: PositionAttempt, state: LearningState
+    ) -> LearningState:
+        """Learn only from confirmed closes with a HODL-relative result."""
+        if (
+            attempt.entry_side not in {1, 2, 3}
+            or not attempt.entry_regime.strip()
+            or attempt.vs_hodl_pct is None
+        ):
+            return state
+        regime = attempt.entry_regime.strip().upper().replace(" ", "_")
+        key = f"{attempt.sleeve}|{regime}|{attempt.entry_side}"
+        performance = state.side_performance.get(key, SidePerformance())
+        updated = SidePerformance(
+            verified_samples=performance.verified_samples + 1,
+            cumulative_vs_hodl_pct=round(
+                performance.cumulative_vs_hodl_pct + attempt.vs_hodl_pct, 6
+            ),
+            beat_hodl_count=(
+                performance.beat_hodl_count
+                + (1 if attempt.vs_hodl_pct > 0 else 0)
+            ),
+        )
+        side_performance = dict(state.side_performance)
+        side_performance[key] = updated
+        return replace(state, side_performance=side_performance)
 
     @staticmethod
     def _count(

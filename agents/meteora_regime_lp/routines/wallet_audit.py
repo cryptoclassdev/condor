@@ -28,7 +28,8 @@ This routine reports the FULL book and splits it in two:
                is one swap away from being deployable, and until it is swapped
                it carries full directional risk with no stop-loss on it.
 
-Read-only. It never swaps; recovering stranded inventory is a deliberate act.
+Read-only. It never swaps; the separate ``inventory_cleanup_guard`` may authorize one
+mint-addressed SOL cleanup after this audit proves the balance exists on-chain.
 """
 
 import logging
@@ -55,7 +56,7 @@ class Config(BaseModel):
         description="Tokens the sleeves can deploy directly; all others are stranded inventory",
     )
     dust_usd: float = Field(
-        default=0.50, description="Ignore balances worth less than this"
+        default=0.01, description="Ignore balances worth less than this"
     )
     refresh: bool = Field(
         default=True, description="Force a balance refresh rather than trusting cache"
@@ -202,7 +203,8 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
             f"counting this — journal the stranded figure explicitly alongside the quote "
             f"balances; (2) it carries full directional risk with NO stop-loss on it, so "
             f"the longer it sits the more it is an unmanaged position rather than a cash "
-            f"balance. Recovering it is a deliberate swap, never automatic."
+            f"balance. Pass it to inventory_cleanup_guard; only an exact mint-addressed "
+            f"guard plan may authorize an automatic SOL cleanup."
         )
     else:
         parts.append(

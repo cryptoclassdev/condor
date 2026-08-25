@@ -70,6 +70,9 @@ def evaluate_lifecycle(
     micro_runner_max_hold_min: float = 15.0,
     micro_runner_stop_loss_pct: float = 3.0,
     micro_runner_take_profit_pct: float = 5.0,
+    take_profit_pct: float = 12.0,
+    trailing_arm_pct: float = 8.0,
+    trailing_gap_pct: float = 6.0,
     material_fill_change_pct: float = 20.0,
     early_exit_buffer_pct: float = 2.0,
     out_of_range_max_sec: float = 1800.0,
@@ -106,12 +109,12 @@ def evaluate_lifecycle(
         if created is None:
             created = now
 
-        take_profit_pct: float | None = None
+        position_take_profit_pct: float | None = float(take_profit_pct)
         if executor_id in micro_runner_ids:
             sleeve = "runner_micro"
             hold_min = float(micro_runner_max_hold_min)
             stop_pct = float(micro_runner_stop_loss_pct)
-            take_profit_pct = float(micro_runner_take_profit_pct)
+            position_take_profit_pct = float(micro_runner_take_profit_pct)
         elif executor_id in runner_ids:
             sleeve = "runner"
             hold_min = float(runner_max_hold_min)
@@ -150,8 +153,17 @@ def evaluate_lifecycle(
             reasons.append("max-hold")
         if pnl_pct <= -stop_pct:
             reasons.append("stop-loss")
-        if take_profit_pct is not None and pnl_pct >= take_profit_pct:
+        if (
+            position_take_profit_pct is not None
+            and pnl_pct >= position_take_profit_pct
+        ):
             reasons.append("take-profit")
+        if (
+            sleeve != "runner_micro"
+            and peak >= float(trailing_arm_pct)
+            and pnl_pct <= peak - float(trailing_gap_pct)
+        ):
+            reasons.append("trailing-profit")
 
         state = str(custom.get("state") or "UNKNOWN").upper()
         current_price = _num(custom.get("current_price"))

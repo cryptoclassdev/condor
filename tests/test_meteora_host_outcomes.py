@@ -180,6 +180,138 @@ def test_host_capture_persists_executor_sleeve_for_timeout_supervision(
     assert host_outcomes.sleeve_for_executor("executor-123") == "runner"
 
 
+def test_host_capture_preserves_actual_side_and_entry_regime(tmp_path, monkeypatch):
+    root = _runtime_store(tmp_path, monkeypatch)
+    calls = [
+        {
+            "id": "entry-check",
+            "name": "manage_routines",
+            "status": "completed",
+            "input": {
+                "action": "run",
+                "name": "outcome_learner",
+                "config": {
+                    "mode": "entry_check",
+                    "pool_address": "pool-authority-123",
+                    "sleeve": "core",
+                    "regime": "TRENDING_UP",
+                },
+            },
+            "output": "ENTRY_ALLOWED; recommended_side=2",
+        },
+        {
+            "id": "create",
+            "name": "manage_executors",
+            "status": "completed",
+            "input": {
+                "action": "create",
+                "executor_config": {
+                    "pool_address": "pool-authority-123",
+                    "side": 2,
+                },
+            },
+            "output": {
+                "executor_id": "executor-123",
+                "position_address": "position-authority-456",
+            },
+        },
+    ]
+
+    asyncio.run(
+        host_outcomes.capture(
+            client=_Client(),
+            agent_id="agent_1",
+            tick=15,
+            tool_calls=calls,
+            evidence_before={"wallet_before_usd": 100.0},
+        )
+    )
+
+    pending = json.loads((root / "pending.json").read_text())["attempts"]
+    assert pending[0]["entry_side"] == 2
+    assert pending[0]["entry_regime"] == "TRENDING_UP"
+
+    asyncio.run(host_outcomes.reconcile(client=_Client(), agent_id="agent_1", tick=16))
+    state = json.loads((root / "state.json").read_text())["state"]
+    assert state["active_side_contexts"]["pool-authority-123"] == {
+        "entry_side": 2,
+        "entry_regime": "TRENDING_UP",
+    }
+
+
+def test_host_capture_recovers_regime_from_regime_engine_when_entry_check_omits_it(
+    tmp_path, monkeypatch
+):
+    root = _runtime_store(tmp_path, monkeypatch)
+    calls = [
+        {
+            "id": "regime",
+            "name": "manage_routines",
+            "status": "completed",
+            "input": {
+                "action": "run",
+                "name": "regime_engine",
+                "config": {"pool_addresses": ["pool-authority-123"]},
+            },
+            "output": {
+                "text": "Classified 1 pool(s): TRENDINGx1",
+                "table_data": [
+                    {
+                        "Pool": "pool-authority-123",
+                        "Regime": "TRENDING",
+                        "Trend": "1.53 up",
+                    }
+                ],
+            },
+        },
+        {
+            "id": "entry-check",
+            "name": "manage_routines",
+            "status": "completed",
+            "input": {
+                "action": "run",
+                "name": "outcome_learner",
+                "config": {
+                    "mode": "entry_check",
+                    "pool_address": "pool-authority-123",
+                    "sleeve": "core",
+                },
+            },
+            "output": "ENTRY_ALLOWED; recommended_side=1",
+        },
+        {
+            "id": "create",
+            "name": "manage_executors",
+            "status": "completed",
+            "input": {
+                "action": "create",
+                "executor_config": {
+                    "pool_address": "pool-authority-123",
+                    "side": 1,
+                },
+            },
+            "output": {
+                "executor_id": "executor-123",
+                "position_address": "position-authority-456",
+            },
+        },
+    ]
+
+    asyncio.run(
+        host_outcomes.capture(
+            client=_Client(),
+            agent_id="agent_1",
+            tick=20,
+            tool_calls=calls,
+            evidence_before={"wallet_before_usd": 100.0},
+        )
+    )
+
+    pending = json.loads((root / "pending.json").read_text())["attempts"]
+    assert pending[0]["entry_side"] == 1
+    assert pending[0]["entry_regime"] == "TRENDING_UP"
+
+
 def test_timeout_supervisor_stops_only_owned_executor_with_hard_exit(
     tmp_path, monkeypatch
 ):

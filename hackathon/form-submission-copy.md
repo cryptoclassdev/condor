@@ -1,6 +1,6 @@
 # Botcamp form copy — Regime LP Operator
 
-Prepared for an early **Agent Builders Cup 1 / Meteora** review on 24 August 2026.
+Prepared for an early **Agent Builders Cup 1 / Meteora** review on 25 August 2026.
 Use the confident technical-founder version below. Replace only the three bracketed identity
 and media placeholders before submitting.
 
@@ -12,14 +12,14 @@ Regime LP Operator
 
 ### Tagline
 
-A regime-aware Meteora LP agent that verifies every open and close against Solana.
+Deposit SOL. Choose your risk. Let the agent run your entire Meteora LP portfolio.
 
 ### Short description
 
-Regime LP Operator autonomously manages Meteora DLMM liquidity across core, satellite and
-runner sleeves. It adapts ranges to volatility, offers Guardian, Balanced and Hunter risk
-profiles, and treats executor results as unverified until on-chain position and wallet evidence
-agree.
+Fund one wallet and walk away from day-to-day LP management. Regime LP Operator discovers
+eligible Meteora pools, allocates capital, manages ranges, protects gains, exits risk,
+rebalances, and cleans residual tokens automatically—with Guardian, Balanced, and Hunter
+risk profiles and on-chain verification behind every action.
 
 ### Team / sponsor preference
 
@@ -52,23 +52,25 @@ https://github.com/cryptoclassdev/condor/tree/meteora-cup
 
 ## Main strategy description
 
-Opening a Meteora position is easy. Keeping an autonomous agent in control when the RPC,
-executor registry, wallet and on-chain position state disagree is the difficult part. Regime
-LP Operator is a Condor agent that manages Meteora DLMM liquidity while treating Solana—not
-its own execution response—as the source of truth.
+LP yield is rarely passive. Someone still has to compare pools, judge volatility, choose a
+range, monitor price, take profit, cut deteriorating positions, rebalance capital and sell the
+small token balances left behind after an exit. Regime LP Operator turns all of that into one
+decision: fund a Solana wallet, choose a risk level and start the agent.
 
-Users choose Guardian, Balanced or Hunter at startup. Each profile divides measured equity
-between a deep SOL/USDC core, safety-gated satellite pools and a small runner sleeve for young
-Meteora pools with accelerating five-minute volume. The selected profile changes opportunity,
-but it cannot remove reserves, token checks, slot ceilings, stop-losses or drawdown limits.
+From that point, the agent runs the Meteora LP portfolio. It discovers and ranks eligible
+pools, rejects unsafe or chaotic opportunities, allocates real wallet equity, opens positions,
+manages ranges, protects gains, exits on risk or volume decay, rebalances into stronger
+opportunities and converts residual inventory back toward SOL. Users choose Guardian, Balanced
+or Hunter; the profile changes how capital is split between a deep SOL/USDC core, gated
+satellite pools and a small high-velocity runner sleeve.
 
-Before every decision, deterministic guards reconcile running executors with positions the
-wallet actually owns, inventory the wallet, calculate usable USD equity after gas and position
-rent, and enforce lifecycle exits. The strategy changes DLMM distribution and width from the
-observed regime: concentrated Curve liquidity in calm markets, quote-side Bid-Ask liquidity
-when a pullback can fill profitably, and no entry when data is stale or conditions are chaotic.
+The automation is regime-aware rather than APR-chasing. Calm markets receive tighter Curve
+liquidity, ranging or rising markets can use one-sided Bid-Ask placement, and unstable markets
+pause. Position size comes from wallet plus chain-confirmed LP equity after gas, rent and slot
+reserves—not from an optimistic configured balance.
 
-Every create and close is verified on a later authority read. A reported success without a
+The user experience can be simple because the operating layer is strict. Every create and
+close is verified on a later authority read. A reported success without a
 matching on-chain position or wallet movement remains unverified. A reported failure that did
 land is adopted rather than duplicated. An append-only outcome ledger classifies indexing lag,
 false-success ghosts, false-failure orphans, insufficient exact-token balance, invalid ranges,
@@ -170,20 +172,17 @@ chain-first verification doctrine.
 
 ### 160-character pitch
 
-Regime-aware Meteora liquidity with three risk profiles, chain-verified execution, bounded
-learning and deterministic recovery through model or RPC failure.
+Deposit SOL, choose your risk, and let one agent discover, manage, rebalance and exit Meteora
+LP positions for you.
 
 ### 60-second judge summary
 
-Regime LP Operator is a live-tested Meteora DLMM agent for Condor. It allocates measured equity
-across core, satellite and runner sleeves, changes liquidity shape based on volatility regime,
-and offers Guardian, Balanced and Hunter startup profiles. Its main innovation is bidirectional
-execution verification: executor success is not trusted until Solana ownership and wallet
-movement agree, while a failed create that landed is adopted instead of duplicated. Hard risk
-guards and lifecycle exits continue during model timeouts, and verified failures can adjust
-only bounded execution parameters. It is built for the Agent Builders Cup's P&L, gross-filled-
-notional and voting criteria without confusing deposited capital or whole-pool volume with
-agent volume.
+Regime LP Operator turns Meteora LP into a fund-and-run product. A user funds one wallet,
+chooses Guardian, Balanced or Hunter, and the agent handles pool discovery, allocation, range
+management, gain protection, exits, rebalancing and residual cleanup. Underneath that simple
+experience, every executor result is verified against Solana, existing positions are recovered
+after restart, and hard capital and token-safety controls remain deterministic. It is built for
+profitable autonomous liquidity—not APR chasing or manual position babysitting.
 
 ## Final pre-submit replacements
 

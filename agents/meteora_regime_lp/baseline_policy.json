@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "inventory_heavy_ratio": 0.6,
+  "minimum_verified_side_samples": 3,
+  "minimum_outperformance_margin_pct": 0.5,
+  "maximum_learned_bias": 0.15
+}

@@ -12,6 +12,8 @@ def test_judge_package_contains_every_required_artifact():
         "agent": ROOT / "agents/meteora_regime_lp/AGENT.md",
         "strategy": ROOT
         / "agents/meteora_regime_lp/strategies/regime_lp_operator/strategy.md",
+        "portable learning baseline": ROOT
+        / "agents/meteora_regime_lp/baseline_policy.json",
         "submission copy": ROOT / "hackathon/submission.md",
         "submission preview": ROOT / "hackathon/submission.html",
         "portal form copy": ROOT / "hackathon/form-submission-copy.md",
@@ -79,6 +81,7 @@ def test_meteora_routine_package_is_discoverable():
         "capital_guard",
         "competition_guard",
         "hedge_guard",
+        "inventory_cleanup_guard",
         "lifecycle_guard",
         "meteora_pool_scanner",
         "meteora_truth",
@@ -101,3 +104,12 @@ def test_makefile_exposes_one_command_judge_verification():
     assert "test_meteora_submission_package.py" in makefile
     assert "npm test" in makefile
     assert "npm run build" in makefile
+
+
+def test_strategy_tool_budget_covers_verified_rechase_sequence():
+    strategy = (
+        ROOT / "agents/meteora_regime_lp/strategies/regime_lp_operator/strategy.md"
+    ).read_text()
+
+    assert "max_tool_calls_per_tick: 16" in strategy
+    assert "≤ 16 operational MCP calls" in strategy

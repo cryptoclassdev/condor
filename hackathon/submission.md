@@ -10,8 +10,7 @@ notional; trading fees are paid from the same $800 account and therefore reduce 
 
 **Project name:** Regime LP Operator
 
-**Tagline:** A chain-verified Meteora agent that adapts DLMM liquidity to market regime and
-refuses to trust an execution result until Solana agrees.
+**Tagline:** Deposit SOL. Choose your risk. Let the agent run your entire Meteora LP portfolio.
 
 **Team preference:** Meteora — rank first
 
@@ -25,11 +24,15 @@ refuses to trust an execution result until Solana agrees.
 
 ## Strategy description for the application
 
-Regime LP Operator is an autonomous Meteora DLMM agent built for a problem that begins after
-most LP demos end: keeping the capital safe when the RPC, executor registry, position cache,
-wallet and protocol view disagree.
+LP yield is rarely passive. Someone still has to find pools, judge volatility, choose ranges,
+monitor price, protect gains, exit deteriorating positions, rebalance capital and clean up the
+tokens left behind. Regime LP Operator turns that workload into one decision: fund a Solana
+wallet, choose a risk level and start the agent.
 
-The agent splits actual risk capital into three independent sleeves. **Core** provides
+From then on, the agent discovers and ranks eligible Meteora pools, rejects unsafe or chaotic
+opportunities, deploys real wallet equity, manages ranges, exits on risk or volume decay,
+rebalances into stronger opportunities and converts residual inventory back toward SOL. It
+splits capital into three independent sleeves. **Core** provides
 SOL/USDC liquidity in deeper pools. **Satellite** enters gated SOL-quoted pools only after
 liquidity, regime and token-safety checks. **Runner** searches young Meteora pools for
 accelerating five-minute volume and uses short maximum holds. Users choose Guardian,

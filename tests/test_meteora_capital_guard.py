@@ -52,6 +52,49 @@ def test_capital_plan_never_counts_stranded_inventory_as_liquid():
     assert plan.max_new_deposit_usd == 8.26
 
 
+def test_capital_plan_reserves_probe_and_rent_for_every_future_target_slot():
+    plan = build_capital_plan(
+        configured_capital_usd=800,
+        wallet_total_usd=137.99,
+        liquid_quote_usd=137.99,
+        open_lp_usd=0,
+        native_price_usd=100,
+        min_native_reserve=0.06,
+        next_position_rent_native=0.0574,
+        daily_loss_limit_pct=6,
+        sleeve_percentages={"core": 60, "satellite": 20, "runner": 20},
+        target_open_slots=3,
+        current_open_slots=0,
+        min_position_deposit_usd=20,
+        slot_reserve_buffer_usd=2,
+    )
+
+    # Before opening the core, preserve two future $20 probes, two rents,
+    # the gas floor, and a small execution buffer.
+    assert plan.future_slot_reserve_usd == 53.48
+    assert plan.max_new_deposit_usd == 72.77
+
+
+def test_capital_plan_blocks_new_entry_when_target_slot_count_is_full():
+    plan = build_capital_plan(
+        configured_capital_usd=800,
+        wallet_total_usd=100,
+        liquid_quote_usd=100,
+        open_lp_usd=100,
+        native_price_usd=100,
+        min_native_reserve=0.06,
+        next_position_rent_native=0.0574,
+        daily_loss_limit_pct=6,
+        sleeve_percentages={"core": 60, "satellite": 20, "runner": 20},
+        target_open_slots=3,
+        current_open_slots=3,
+        min_position_deposit_usd=20,
+        slot_reserve_buffer_usd=2,
+    )
+
+    assert plan.max_new_deposit_usd == 0
+
+
 def test_quote_caps_never_fund_usdc_entry_from_sol_value():
     caps = build_spendable_quote_caps(
         quote_values_usd={"SOL": 65.72, "USDC": 23.09},

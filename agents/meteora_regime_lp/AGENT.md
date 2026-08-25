@@ -1,11 +1,9 @@
 ---
 name: Meteora Regime LP
-description: Regime-aware Meteora DLMM liquidity agent for the Agent Builders Cup —
-  scans USDC-quoted pools with hard safety gates, classifies each pool's volatility
-  regime (CALM/RANGING/TRENDING/CHAOTIC), matches liquidity shape and width to the
-  regime, and runs a core/satellite/reserve portfolio of LP Executor slots with
-  hysteresis-disciplined rotation. Optimizes position value + fees − costs, never
-  APR optics.
+description: Fund a Solana wallet, choose Guardian, Balanced, or Hunter, and let the
+  agent run the Meteora LP portfolio. It discovers eligible pools, allocates capital,
+  manages ranges, protects gains, exits risk, rebalances, cleans residual inventory,
+  and recovers after restarts while verifying every action against Solana.
 agent_key: claude-acp:sonnet
 tools:
 - explore_geckoterminal
@@ -45,8 +43,9 @@ your skills and the `regime_lp_operator` strategy — read them before acting.
 
 ## Routines (yours)
 - **`meteora_pool_scanner`** — one call: USDC-quoted Meteora DLMM pools ranked by fee yield
-  (fees/TVL) with sustained-volume and TVL gates already applied. Returns MintPair, BaseMint,
-  bin_step, price, fee_yield.
+  (fees/TVL) with sustained-volume and TVL gates already applied. Meteora's official DLMM
+  Data API is primary and GeckoTerminal is an independent fallback. Returns MintPair,
+  BaseMint, bin_step, price, fee_yield.
 - **`regime_engine`** — one call per pool set: realized volatility (1h/4h/24h), EMA trend
   strength, price position in recent band → classifies **CALM / RANGING / TRENDING /
   CHAOTIC**, with a suggested shape/width/skew.
@@ -54,11 +53,17 @@ your skills and the `regime_lp_operator` strategy — read them before acting.
   mint authority renounced, freeze authority disabled, top-10 holder concentration. Uses the
   configured private `rpc_url`.
 - **`runner_scanner`** — the RISK sleeve's scanner: fresh Meteora pools (1–48h old) ranked by
-  5-MINUTE volume acceleration, with volume-tiered size suggestions. Zero candidates = the
-  sleeve PAUSES; never loosen gates to find action.
+  5-MINUTE volume acceleration, with volume-tiered size suggestions. It reads native Meteora
+  pool creation and 5m volume history first, then falls back to GeckoTerminal. Zero candidates
+  = the sleeve PAUSES; never loosen gates to find action.
 - **`outcome_learner`** — records next-tick chain + wallet evidence for every create,
   distinguishes indexing lag from execution failure, blocks duplicate retries, and adapts
-  only bounded funding haircut, range width, and RPC backoff parameters after repeated proof.
+  only bounded funding haircut, range width, RPC backoff, and contextual LP side after
+  repeated verified proof. Its versioned baseline ships with the agent; private evidence
+  persists locally across restarts.
+- **`inventory_cleanup_guard`** — chain-authoritative residual inventory planner: protects
+  deployable quote, emits at most one exact-mint sale into SOL, blocks duplicate cleanup,
+  and requires next-tick wallet verification before proceeds can be reused.
 - **`competition_guard`** — read-only 48-hour race clock: blocks late entries and orders a
   verified all-position wind-down before organizer-forced settlement.
 
@@ -78,9 +83,9 @@ coverage, token safety, sellability and capital caps before any entry can be con
 ## Regime → shape policy (hard defaults; deviate only with a journaled reason)
 | Regime | Entry mode | strategyType | Width | Behavior |
 |---|---|---|---|---|
-| CALM | double-sided centered | 1 (Curve) | tight (10–20 bins) | max fee capture on majors; fixed TP |
-| RANGING | **single-sided quote bid-ask BELOW P** | 2 (Bid-Ask) | moderate–wide (30–50 bins) | paid-to-DCA in the retracement band; no entry swap |
-| TRENDING up | single-sided quote bid-ask below P on pullbacks; **flip to token-side above P once filled + higher low** | 2 (Bid-Ask) | wide (40–60 bins) | accumulate the dip, distribute the recovery (both legs earn fees) |
+| CALM | core: learner-selected inventory-compatible side; centered only when balanced | 1 centered / 2 single-sided | tight (10–20 bins) | make markets without manufacturing the wrong inventory |
+| RANGING | core: learner-selected side; satellites: quote bid-ask BELOW P | 2 (or core Curve when centered) | moderate–wide (30–50 bins) | use inventory already held; avoid unnecessary entry swaps |
+| TRENDING up | SOL-heavy core: SOL-only ABOVE P; USDC-heavy core/satellites: quote-only below P | 2 (Bid-Ask) | wide (40–60 bins) | sell existing SOL into strength or accumulate a deliberate pullback |
 | TRENDING down | stand aside or shallow quote-only far below P | 2 | wide | never catch the knife double-sided |
 | CHAOTIC | — | — | — | do not open; if ALL top pools are CHAOTIC, PAUSE new entries entirely |
 

@@ -59,6 +59,8 @@ class PendingAttempt:
     exit_reason: str = ""
     pnl_pct: float | None = None
     vs_hodl_pct: float | None = None
+    entry_side: int | None = None
+    entry_regime: str = ""
 
 
 def _load_pending() -> list[PendingAttempt]:
@@ -173,6 +175,63 @@ def _wallet_before(tool_calls: list[dict[str, Any]]) -> float | None:
         if match:
             return float(match.group(1).replace(",", ""))
     return None
+
+
+def _entry_regime(tool_calls: list[dict[str, Any]], pool_address: str) -> str:
+    """Read the deterministic side-check context that preceded an LP create."""
+    for call in reversed(tool_calls):
+        name = str(call.get("name") or "").lower()
+        call_input = call.get("input") or {}
+        config = call_input.get("config") or {}
+        if (
+            "manage_routines" in name
+            and call_input.get("name") == "outcome_learner"
+            and config.get("mode") == "entry_check"
+            and config.get("pool_address") == pool_address
+        ):
+            regime = str(config.get("regime") or "").strip().upper().replace(" ", "_")
+            direction = str(config.get("trend_direction") or "").strip().upper()
+            if regime == "TRENDING" and direction in {"UP", "DOWN"}:
+                return f"TRENDING_{direction}"
+            if regime:
+                return regime
+
+    # The reasoning model can omit redundant context fields from entry_check even
+    # after regime_engine returned them in the same tick. Recover the measurement
+    # from that routine's structured table so learning does not depend on prompt
+    # compliance. This is observation only; it cannot change or submit a trade.
+    for call in reversed(tool_calls):
+        name = str(call.get("name") or "").lower()
+        call_input = call.get("input") or {}
+        if "manage_routines" not in name or call_input.get("name") != "regime_engine":
+            continue
+        for row in _walk(call.get("output")):
+            row_pool = str(row.get("Pool") or row.get("pool") or "")
+            if row_pool != pool_address:
+                continue
+            regime = str(row.get("Regime") or row.get("regime") or "").upper()
+            if regime != "TRENDING":
+                return regime
+            trend = str(
+                row.get("Trend") or row.get("trend") or row.get("trend_dir") or ""
+            ).upper()
+            if re.search(r"\bUP\b", trend):
+                direction = "UP"
+            elif re.search(r"\bDOWN\b", trend):
+                direction = "DOWN"
+            else:
+                direction = ""
+            return f"TRENDING_{direction}" if direction else regime
+    return ""
+
+
+def _entry_side(call_input: dict[str, Any]) -> int | None:
+    raw = (call_input.get("executor_config") or {}).get("side")
+    try:
+        side = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return side if side in {1, 2, 3} else None
 
 
 def _is_executor_action(call: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
@@ -638,6 +697,8 @@ async def reconcile(*, client: Any, agent_id: str, tick: int) -> None:
                     pnl_pct=item.pnl_pct,
                     vs_hodl_pct=item.vs_hodl_pct,
                     observed_tick=tick,
+                    entry_side=item.entry_side,
+                    entry_regime=item.entry_regime,
                 )
                 result = OutcomeLearner().observe(attempt, state)
                 if result.outcome == "UNCLASSIFIED":
@@ -729,6 +790,12 @@ async def capture(
                 ),
                 error_message=error,
                 observed_tick=tick,
+                entry_side=_entry_side(call_input) if raw_action == "create" else None,
+                entry_regime=(
+                    _entry_regime(tool_calls, pool)
+                    if raw_action == "create"
+                    else ""
+                ),
             )
         )
         known.add(attempt_id)

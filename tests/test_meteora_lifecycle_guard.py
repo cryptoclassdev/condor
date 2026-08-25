@@ -170,6 +170,49 @@ def test_micro_runner_has_its_own_take_profit_stop_and_deadline():
     assert rows[2].reasons == ("max-hold",)
 
 
+def test_standard_position_takes_profit_at_the_hard_cap():
+    profitable = _satellite(pnl=0.12)
+
+    rows, _ = evaluate_lifecycle(
+        [profitable],
+        now=NOW,
+        previous_state={},
+        satellite_max_hold_min=120,
+        runner_max_hold_min=90,
+        satellite_stop_loss_pct=8,
+        runner_stop_loss_pct=6,
+        take_profit_pct=12,
+        trailing_arm_pct=8,
+        trailing_gap_pct=6,
+    )
+
+    assert rows[0].action == "EXIT_NOW"
+    assert rows[0].reasons == ("take-profit",)
+
+
+def test_standard_position_exits_when_armed_trailing_stop_retraces():
+    retraced = _satellite(pnl=0.04)
+
+    rows, _ = evaluate_lifecycle(
+        [retraced],
+        now=NOW,
+        previous_state={
+            "sat-position": {"fill_pct": 28.57, "peak_pnl_pct": 10.0}
+        },
+        satellite_max_hold_min=120,
+        runner_max_hold_min=90,
+        satellite_stop_loss_pct=8,
+        runner_stop_loss_pct=6,
+        take_profit_pct=12,
+        trailing_arm_pct=8,
+        trailing_gap_pct=6,
+    )
+
+    assert rows[0].action == "EXIT_NOW"
+    assert rows[0].peak_pnl_pct == 10
+    assert rows[0].reasons == ("trailing-profit",)
+
+
 def test_hot_reloaded_guard_supports_a_legacy_lifecycle_module(monkeypatch):
     class Executors:
         async def search_executors(self, **_kwargs):

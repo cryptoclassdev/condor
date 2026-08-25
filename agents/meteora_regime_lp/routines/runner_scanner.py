@@ -33,6 +33,11 @@ from pydantic import BaseModel, Field
 from telegram.ext import ContextTypes
 
 from config_manager import get_client
+from agents.meteora_regime_lp.meteora_data_api import (
+    aggregate_five_minute_history,
+    get_json as meteora_get_json,
+    pool_to_gecko_shape,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +97,17 @@ class Config(BaseModel):
         default=[], description="Held/blocked pool addresses"
     )
     exclude_mints: list[str] = Field(default=[], description="Held/blocked base mints")
+    prefer_meteora_api: bool = Field(
+        default=True,
+        description="Use Meteora's official indexed API before GeckoTerminal fallback",
+    )
+    native_page_size: int = Field(default=100, ge=1, le=1000)
+    native_shortlist: int = Field(
+        default=24,
+        ge=1,
+        le=29,
+        description="Newest eligible native pools to enrich with 5m volume history",
+    )
 
 
 def _retry_delay(headers, attempt: int) -> float:
@@ -204,6 +220,64 @@ async def _fetch_gecko_feeds(
     return raw, successful_sources, circuit_open
 
 
+async def _fetch_meteora_native_runner(
+    session: aiohttp.ClientSession,
+    config: Config,
+    *,
+    now_epoch: float,
+    sleep=asyncio.sleep,
+) -> list[dict]:
+    """Fetch fresh pools and exact 5m volume from Meteora's official API."""
+
+    payload = await meteora_get_json(
+        session,
+        "pools",
+        {
+            "page": 1,
+            "page_size": config.native_page_size,
+            "sort_by": "pool_created_at:desc",
+            "filter_by": (
+                f"tvl>={config.min_tvl_usd:g} && tvl<={config.max_tvl_usd:g} "
+                "&& is_blacklisted=false"
+            ),
+        },
+    )
+    preselected: list[dict] = []
+    for pool in payload.get("data", []) or []:
+        if not isinstance(pool, dict):
+            continue
+        raw = pool_to_gecko_shape(pool)
+        attrs = raw.get("attributes", {})
+        age = _age_hours(attrs.get("pool_created_at"))
+        rel = raw.get("relationships", {})
+        base_id = ((rel.get("base_token") or {}).get("data") or {}).get("id") or ""
+        quote_id = ((rel.get("quote_token") or {}).get("data") or {}).get("id") or ""
+        if age is None or not (config.min_age_hours <= age <= config.max_age_hours):
+            continue
+        if SOL_MINT not in (base_id.split("_", 1)[-1], quote_id.split("_", 1)[-1]):
+            continue
+        preselected.append(pool)
+        if len(preselected) >= config.native_shortlist:
+            break
+
+    raw: list[dict] = []
+    start_time = max(0, int(now_epoch - 3600))
+    end_time = int(now_epoch)
+    for index, pool in enumerate(preselected):
+        if index:
+            # The official limit is 30 RPS. Sequential requests plus this floor
+            # keep the scanner below it even on a very fast local connection.
+            await sleep(0.04)
+        history = await meteora_get_json(
+            session,
+            f"pools/{pool.get('address')}/volume/history",
+            {"timeframe": "5m", "start_time": start_time, "end_time": end_time},
+        )
+        m5, h1 = aggregate_five_minute_history(history.get("data", []) or [])
+        raw.append(pool_to_gecko_shape(pool, m5_volume=m5, h1_volume=h1))
+    return raw
+
+
 def _num(v, default=0.0):
     try:
         return float(v)
@@ -279,49 +353,64 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         user_data = {}
     now_epoch = datetime.now(timezone.utc).timestamp()
     cooldown_until = float(user_data.get(_COOLDOWN_KEY, 0) or 0)
-    if cooldown_until > now_epoch:
-        remaining = cooldown_until - now_epoch
-        return (
-            f"runner_scanner: RATE-LIMIT COOLDOWN active for {remaining:.0f}s. "
-            "Runner sleeve must PAUSE; safety supervision continues and no "
-            "provider calls were made."
-        )
+    gecko_cooldown_active = cooldown_until > now_epoch
 
     raw = []
+    native_succeeded = False
+    successful_sources = 0
+    total_sources = 0
+    circuit_open = False
+    coverage_prefix = ""
     try:
         async with asyncio.timeout(max(0.01, config.scan_timeout_sec)):
             async with aiohttp.ClientSession() as session:
-                # Fresh Meteora pools are sparse in network-wide feeds.
-                # new_pools is the ONLY genuinely young feed, but it is network-wide,
-                # so most of it is not Meteora — page it as deep as the API allows.
-                # The venue list is sorted two ways on purpose: by 24h volume (which
-                # skews old and large) and by 24h tx count, where a young, busy pool
-                # ranks even when its 24h volume is still small because it has only
-                # existed for two hours.
-                requests = (
-                    [
-                        (f"networks/{GECKO_NETWORK}/new_pools", {"page": p})
-                        for p in range(1, 11)
-                    ]
-                    + [
-                        (
-                            f"networks/{GECKO_NETWORK}/dexes/{VENUE}/pools",
-                            {"page": p, "sort": "h24_volume_usd_desc"},
+                if config.prefer_meteora_api:
+                    try:
+                        raw = await _fetch_meteora_native_runner(
+                            session, config, now_epoch=now_epoch
                         )
-                        for p in range(1, 4)
-                    ]
-                    + [
-                        (
-                            f"networks/{GECKO_NETWORK}/dexes/{VENUE}/pools",
-                            {"page": p, "sort": "h24_tx_count_desc"},
+                        native_succeeded = True
+                        coverage_prefix = "SOURCE: Meteora DLMM Data API. "
+                    except Exception as native_error:
+                        logger.warning(
+                            "runner_scanner: Meteora native source failed: %s",
+                            native_error,
                         )
-                        for p in range(1, 4)
-                    ]
-                    + [(f"networks/{GECKO_NETWORK}/trending_pools", None)]
-                )
-                raw, successful_sources, circuit_open = await _fetch_gecko_feeds(
-                    session, requests
-                )
+                if not native_succeeded:
+                    if gecko_cooldown_active:
+                        remaining = cooldown_until - now_epoch
+                        return (
+                            "runner_scanner: Meteora native source unavailable and "
+                            f"GeckoTerminal RATE-LIMIT COOLDOWN active for {remaining:.0f}s. "
+                            "Runner sleeve must PAUSE; safety supervision continues."
+                        )
+                    # Fresh Meteora pools are sparse in network-wide feeds. Page the
+                    # independent fallback deeply, but stop on provider-wide 429s.
+                    requests = (
+                        [
+                            (f"networks/{GECKO_NETWORK}/new_pools", {"page": p})
+                            for p in range(1, 11)
+                        ]
+                        + [
+                            (
+                                f"networks/{GECKO_NETWORK}/dexes/{VENUE}/pools",
+                                {"page": p, "sort": "h24_volume_usd_desc"},
+                            )
+                            for p in range(1, 4)
+                        ]
+                        + [
+                            (
+                                f"networks/{GECKO_NETWORK}/dexes/{VENUE}/pools",
+                                {"page": p, "sort": "h24_tx_count_desc"},
+                            )
+                            for p in range(1, 4)
+                        ]
+                        + [(f"networks/{GECKO_NETWORK}/trending_pools", None)]
+                    )
+                    total_sources = len(requests)
+                    raw, successful_sources, circuit_open = await _fetch_gecko_feeds(
+                        session, requests
+                    )
     except TimeoutError:
         return (
             f"runner_scanner: SOURCE TIMEOUT after {config.scan_timeout_sec:g}s. "
@@ -329,9 +418,11 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
             "retry on the next scheduled deep tick."
         )
     except Exception as e:
-        return f"runner_scanner: failed to reach GeckoTerminal: {e}"
+        return f"runner_scanner: all discovery sources failed: {e}"
 
-    total_sources = len(requests)
+    if native_succeeded:
+        successful_sources = 1
+        total_sources = 1
     if circuit_open:
         user_data[_COOLDOWN_KEY] = now_epoch + max(
             1.0, config.rate_limit_cooldown_sec
@@ -342,9 +433,13 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
             f"{total_sources} GeckoTerminal feeds succeeded. Runner sleeve must PAUSE; "
             "do not interpret this as a lack of candidates and do not relax gates."
         )
-    coverage_prefix = source_coverage_prefix(
-        successful=successful_sources, total=total_sources
-    )
+    if not native_succeeded:
+        coverage_prefix = (
+            "SOURCE FALLBACK: Meteora native API unavailable. "
+            + source_coverage_prefix(
+                successful=successful_sources, total=total_sources
+            )
+        )
     if circuit_open:
         coverage_prefix += (
             "RATE-LIMIT CIRCUIT OPEN: remaining feeds were skipped to protect the "

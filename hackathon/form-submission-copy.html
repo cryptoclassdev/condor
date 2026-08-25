@@ -24,12 +24,12 @@
 <body>
 <main>
   <h1>Regime LP Operator</h1>
-  <p class="lead">Copy-ready Botcamp submission fields for an early Agent Builders Cup 1 / Meteora review. The detailed source of truth is <a href="form-submission-copy.md">form-submission-copy.md</a>.</p>
+  <p class="lead">Copy-ready Botcamp submission fields for an early Agent Builders Cup 1 / Meteora review, refreshed 25 August 2026. The detailed source of truth is <a href="form-submission-copy.md">form-submission-copy.md</a>.</p>
 
   <h2>Core fields</h2>
   <section class="field"><h3>Project / agent name</h3><div class="value">Regime LP Operator</div></section>
-  <section class="field"><h3>Tagline</h3><div class="value">A regime-aware Meteora LP agent that verifies every open and close against Solana.</div></section>
-  <section class="field"><h3>Short description</h3><div class="value">Regime LP Operator autonomously manages Meteora DLMM liquidity across core, satellite and runner sleeves. It adapts ranges to volatility, offers Guardian, Balanced and Hunter risk profiles, and treats executor results as unverified until on-chain position and wallet evidence agree.</div></section>
+  <section class="field"><h3>Tagline</h3><div class="value">Deposit SOL. Choose your risk. Let the agent run your entire Meteora LP portfolio.</div></section>
+  <section class="field"><h3>Short description</h3><div class="value">Fund one wallet and walk away from day-to-day LP management. Regime LP Operator discovers eligible Meteora pools, allocates capital, manages ranges, protects gains, exits risk, rebalances, and cleans residual tokens automatically—with Guardian, Balanced, and Hunter risk profiles and on-chain verification behind every action.</div></section>
   <section class="field"><h3>Team / sponsor preference</h3><div class="value">Meteora — first preference</div></section>
   <section class="field"><h3>Agent type</h3><div class="value">Condor autonomous trading agent</div></section>
   <section class="field"><h3>Venue and protocols</h3><div class="value">Solana mainnet; Meteora DLMM through Hummingbot Gateway and LP Executors, with Jupiter used only for required inventory conversion and residual cleanup.</div></section>
@@ -39,13 +39,13 @@ Builder: [YOUR PUBLIC NAME]
 Profile: [YOUR GITHUB, X, OR LINKEDIN URL]</div></section>
 
   <h2>Main strategy description</h2>
-  <section class="field"><div class="value">Opening a Meteora position is easy. Keeping an autonomous agent in control when the RPC, executor registry, wallet and on-chain position state disagree is the difficult part. Regime LP Operator is a Condor agent that manages Meteora DLMM liquidity while treating Solana—not its own execution response—as the source of truth.
+  <section class="field"><div class="value">LP yield is rarely passive. Someone still has to compare pools, judge volatility, choose a range, monitor price, take profit, cut deteriorating positions, rebalance capital and sell the small token balances left behind after an exit. Regime LP Operator turns all of that into one decision: fund a Solana wallet, choose a risk level and start the agent.
 
-Users choose Guardian, Balanced or Hunter at startup. Each profile divides measured equity between a deep SOL/USDC core, safety-gated satellite pools and a small runner sleeve for young Meteora pools with accelerating five-minute volume. The selected profile changes opportunity, but it cannot remove reserves, token checks, slot ceilings, stop-losses or drawdown limits.
+From that point, the agent runs the Meteora LP portfolio. It discovers and ranks eligible pools, rejects unsafe or chaotic opportunities, allocates real wallet equity, opens positions, manages ranges, protects gains, exits on risk or volume decay, rebalances into stronger opportunities and converts residual inventory back toward SOL. Users choose Guardian, Balanced or Hunter; the profile changes how capital is split between a deep SOL/USDC core, gated satellite pools and a small high-velocity runner sleeve.
 
-Before every decision, deterministic guards reconcile running executors with positions the wallet actually owns, inventory the wallet, calculate usable USD equity after gas and position rent, and enforce lifecycle exits. The strategy changes DLMM distribution and width from the observed regime: concentrated Curve liquidity in calm markets, quote-side Bid-Ask liquidity when a pullback can fill profitably, and no entry when data is stale or conditions are chaotic.
+The automation is regime-aware rather than APR-chasing. Calm markets receive tighter Curve liquidity, ranging or rising markets can use one-sided Bid-Ask placement, and unstable markets pause. Position size comes from wallet plus chain-confirmed LP equity after gas, rent and slot reserves—not from an optimistic configured balance.
 
-Every create and close is verified on a later authority read. A reported success without a matching on-chain position or wallet movement remains unverified. A reported failure that did land is adopted rather than duplicated. An append-only outcome ledger classifies indexing lag, false-success ghosts, false-failure orphans, insufficient exact-token balance, invalid ranges, RPC failures and market exits. Repeated evidence may tune only bounded execution details such as funding haircut, range width and retry backoff; it can never relax the hard risk policy or grant transaction authority.
+The user experience can be simple because the operating layer is strict. Every create and close is verified on a later authority read. A reported success without a matching on-chain position or wallet movement remains unverified. A reported failure that did land is adopted rather than duplicated. An append-only outcome ledger classifies indexing lag, false-success ghosts, false-failure orphans, insufficient exact-token balance, invalid ranges, RPC failures and market exits. Repeated evidence may tune only bounded execution details such as funding haircut, range width and retry backoff; it can never relax the hard risk policy or grant transaction authority.
 
 The agent has been exercised with real Meteora positions on Solana mainnet. That testing found two upstream DLMM close-path defects, partial wallet reads, stale position-cache rows, rate-limit failure modes, and a portfolio cache that omitted Token-2022 balances, all of which became recovery logic and regression tests. It has also proven restart-on-boot adoption of live positions without duplicate entries. The current suite passes 1,561 tests locally.
 

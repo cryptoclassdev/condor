@@ -1,8 +1,12 @@
 # Judge quick start — Regime LP Operator
 
-Regime LP Operator is a Condor agent for Meteora DLMM. It selects liquidity ranges from
-market regime, divides capital into independent core/satellite/runner sleeves, and verifies
-executor claims against Solana before treating a position as open or closed.
+Regime LP Operator turns Meteora LP into a simple user flow: fund a Solana wallet, choose
+Guardian, Balanced, or Hunter, and start the agent. It then discovers eligible pools, allocates
+capital, manages ranges, protects gains, exits risk, rebalances, cleans residual inventory,
+and recovers after restarts without requiring the user to operate individual positions.
+
+Underneath that automation, executor claims are verified against Solana before any position is
+treated as open or closed.
 
 The repository contains no custom Solana program or custodial vault. It orchestrates the
 existing Hummingbot API, Gateway, Jupiter and Meteora integrations.

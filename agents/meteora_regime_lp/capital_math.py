@@ -21,6 +21,7 @@ class CapitalPlan:
     daily_loss_limit_usd: float
     gas_reserve_usd: float
     next_position_rent_usd: float
+    future_slot_reserve_usd: float
     max_new_deposit_usd: float
     sleeve_budgets_usd: dict[str, float]
 
@@ -66,6 +67,10 @@ def build_capital_plan(
     next_position_rent_native: float,
     daily_loss_limit_pct: float,
     sleeve_percentages: dict[str, float],
+    target_open_slots: int = 1,
+    current_open_slots: int = 0,
+    min_position_deposit_usd: float = 20.0,
+    slot_reserve_buffer_usd: float = 0.0,
 ) -> CapitalPlan:
     """Return a conservative plan from authoritative, same-tick inputs.
 
@@ -84,17 +89,34 @@ def build_capital_plan(
         min_native_reserve,
         next_position_rent_native,
         daily_loss_limit_pct,
+        min_position_deposit_usd,
+        slot_reserve_buffer_usd,
     )
     if any(float(value) < 0 for value in inputs):
         raise ValueError("capital inputs cannot be negative")
     if sum(float(v) for v in sleeve_percentages.values()) > 100.000001:
         raise ValueError("sleeve percentages cannot exceed 100%")
+    if target_open_slots < 1 or current_open_slots < 0:
+        raise ValueError("slot counts must be non-negative and target must be at least one")
 
     effective_equity = float(wallet_total_usd) + float(open_lp_usd)
     risk_capital = min(float(configured_capital_usd), effective_equity)
     gas_reserve = float(min_native_reserve) * float(native_price_usd)
     rent = float(next_position_rent_native) * float(native_price_usd)
-    max_new_deposit = max(0.0, float(liquid_quote_usd) - gas_reserve - rent)
+    future_slots = max(0, int(target_open_slots) - int(current_open_slots) - 1)
+    future_slot_reserve = future_slots * (
+        float(min_position_deposit_usd) + rent
+    )
+    if future_slots:
+        future_slot_reserve += float(slot_reserve_buffer_usd)
+    max_new_deposit = (
+        0.0
+        if current_open_slots >= target_open_slots
+        else max(
+            0.0,
+            float(liquid_quote_usd) - gas_reserve - rent - future_slot_reserve,
+        )
+    )
 
     return CapitalPlan(
         effective_equity_usd=_money(effective_equity),
@@ -102,6 +124,7 @@ def build_capital_plan(
         daily_loss_limit_usd=_money(risk_capital * float(daily_loss_limit_pct) / 100.0),
         gas_reserve_usd=_money(gas_reserve),
         next_position_rent_usd=_money(rent),
+        future_slot_reserve_usd=_money(future_slot_reserve),
         max_new_deposit_usd=_money(max_new_deposit),
         sleeve_budgets_usd={
             sleeve: _money(risk_capital * float(pct) / 100.0)

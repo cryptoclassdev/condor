@@ -18,29 +18,30 @@
 
 ### 0:00–0:18 — Hook
 
-**Visual:** Condor and Meteora Portfolio side by side.
+**Visual:** Start on a cluttered Meteora portfolio, then cut immediately to the clean Condor
+profile selector and live portfolio loop.
 
-**Narration:** “Opening a liquidity position is easy. Staying in control when the RPC,
-executor and position cache disagree is the hard part. Regime LP Operator is a Meteora agent
-that trusts Solana before it trusts itself.”
+**Narration:** “LP yield is supposed to be passive, but finding pools, moving ranges, taking
+profit and cleaning up tokens is a full-time job. Regime LP Operator changes that: fund one
+wallet, choose your risk, and let the agent run the entire Meteora portfolio.”
 
 ### 0:18–0:38 — Three operating profiles
 
 **Visual:** Start New Session dialog; move across the three profile cards without starting a
 new session.
 
-**Narration:** “A user chooses Guardian, Balanced or Hunter: safest, slightly risky or more
-risky. Each divides measured capital across core, satellite and runner sleeves. The profile
-changes opportunity, but never removes reserves, loss limits or recovery rules.”
+**Narration:** “Choose Guardian, Balanced or Hunter. From here the agent finds eligible pools,
+allocates capital, manages ranges, protects gains, exits risk, rebalances and cleans residual
+inventory. The profile changes opportunity, but never removes reserves or loss limits.”
 
-### 0:38–1:06 — Chain truth
+### 0:38–1:06 — The autonomous loop
 
-**Visual:** Latest Orphan Guard report. Highlight on-chain positions, executors, orphans,
-ghosts, unclassified reads and phantom-cache rows.
+**Visual:** Live session journal moving from pool discovery to regime decision to an open or
+hold decision; then show the corresponding Meteora position.
 
-**Narration:** “Every minute, this guard compares running executors with positions the wallet
-actually owns. A stale cache row is not a position. An unreadable pool is not empty. The agent
-acts only when the authoritative read is complete, so missing data can never authorize a close.”
+**Narration:** “The agent continuously ranks fee-flow opportunities, checks token safety,
+classifies the volatility regime and chooses the range and position side. It then supervises
+every open position and acts when profit, risk, range or volume rules change.”
 
 ### 1:06–1:31 — Capital truth
 
@@ -82,9 +83,8 @@ notional are not profit.”
 
 **Visual:** Condor live loop with the architecture card in the submission preview.
 
-**Narration:** “Regime LP Operator is a chain-verified operating system for autonomous Meteora
-liquidity. Its finals clock blocks late entries and verifies every close before forced
-settlement—built to survive the full forty-eight-hour race.”
+**Narration:** “Deposit SOL. Choose your risk. Let Regime LP Operator do the rest—autonomous
+Meteora liquidity without the position babysitting.”
 
 ## Recording acceptance check
 

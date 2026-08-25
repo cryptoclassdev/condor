@@ -36,6 +36,14 @@ class Config(BaseModel):
     pnl_pct: float | None = None
     vs_hodl_pct: float | None = None
     observed_tick: int = Field(default=0, ge=0)
+    entry_side: int | None = Field(default=None, ge=1, le=3)
+    entry_regime: str = ""
+    regime: str = ""
+    trend_direction: str = ""
+    base_asset: str = ""
+    quote_asset: str = ""
+    wallet_base_usd: float = Field(default=0, ge=0)
+    wallet_quote_usd: float = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def record_requires_attempt_id(self):
@@ -63,21 +71,52 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
                 "outcome_learner: ENTRY_BLOCKED — a host-observed create/close for "
                 "this pool is pending next-tick chain and wallet reconciliation."
             )
-        permission = outcome_policy.OutcomeLearner().entry_permission(
+        learner = outcome_policy.OutcomeLearner()
+        permission = learner.entry_permission(
             config.pool_address, config.observed_tick, prior
         )
         store.save_state(permission.state)
         verdict = "ENTRY_ALLOWED" if permission.allowed else "ENTRY_BLOCKED"
         policy = permission.state.policy
+        side_text = ""
+        if permission.allowed and config.regime.strip():
+            recommendation = learner.recommend_side(
+                outcome_policy.SideContext(
+                    pool_address=config.pool_address,
+                    sleeve=config.sleeve,
+                    regime=config.regime,
+                    base_asset=config.base_asset,
+                    quote_asset=config.quote_asset,
+                    wallet_base_usd=config.wallet_base_usd,
+                    wallet_quote_usd=config.wallet_quote_usd,
+                    trend_direction=config.trend_direction,
+                ),
+                permission.state,
+            )
+            side_text = (
+                f" recommended_side={recommendation.side}; "
+                f"placement={recommendation.placement}; "
+                f"intent={recommendation.intent}; "
+                f"side_reason={recommendation.reason}"
+            )
         return (
             f"outcome_learner: {verdict} — {permission.reason}; "
             f"entry_haircut_bps={policy.entry_haircut_bps}; "
             f"rpc_backoff_scale={policy.rpc_backoff_scale:.2f}; "
-            f"range_width_scale={policy.range_width_scale:.2f}."
+            f"range_width_scale={policy.range_width_scale:.2f};{side_text}."
         )
 
     attempt_data = config.model_dump()
     attempt_data.pop("mode", None)
+    for field in (
+        "regime",
+        "trend_direction",
+        "base_asset",
+        "quote_asset",
+        "wallet_base_usd",
+        "wallet_quote_usd",
+    ):
+        attempt_data.pop(field, None)
     attempt = outcome_policy.PositionAttempt(**attempt_data)
     result = outcome_policy.OutcomeLearner().observe(attempt, prior)
     store.record(attempt, result)

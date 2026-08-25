@@ -18,9 +18,9 @@ MaxWidth%, price), regime row (from `regime_engine`), capital for this slot (USD
 ## 1. Shape by regime
 | Regime | Entry | `strategyType` | Total width | Placement |
 |---|---|---|---|---|
-| CALM (majors) | double-sided `side=3` | `1` (Curve) | 10–20 bins | centered on P |
-| RANGING | **single-sided quote `side=1`** | `2` (Bid-Ask) | 30–50 bins | from just under P down to the recent band low (retracement zone) |
-| TRENDING up | single-sided quote `side=1` on a pullback; later FLIP | `2` | 40–60 bins | below P; after fill + higher low → reopen `side=2` token-side ABOVE P |
+| CALM (majors) | core uses learner-selected side; centered `side=3` only when balanced | `1` centered / `2` single-sided | 10–20 bins | inventory-compatible |
+| RANGING | core uses learner-selected side; satellites use quote `side=1` | `2` (Bid-Ask) | 30–50 bins | side 1 below P; side 2 above P; side 3 centered |
+| TRENDING up | SOL-heavy core uses base `side=2`; quote-heavy core/satellites use `side=1` | `2` | 40–60 bins | sell existing SOL above P or buy a deliberate pullback below P |
 | TRENDING down | skip, or quote-only far below P, reduced size | `2` | wide | deep retracement zone only |
 | CHAOTIC | do not open | — | — | — |
 
@@ -36,14 +36,16 @@ too late = price runs past your new range. You don't need the bottom, just the t
 Width in bins → price bounds: `upper/lower = P × (1 ± half_width)` where the TOTAL width
 satisfies `bins = ln(Pu/Pl) / ln(1 + bin_step/10000)`. **Hard clamp: bins < 69** — compute
 before every open, shrink until it fits (the scanner's MaxWidth% is the ceiling for this
-pool). Bounds MUST bracket the live price from `get_pool_info`: `lower < P < upper`.
+pool). Side 1 is wholly below P, side 2 wholly above P, and only side 3 brackets P.
 
 ## 2. Sizing & side
 - Satellites (SOL-quoted pools): default `side=1` quote-only bid-ask below P —
   `quote_amount = capital`, `base_amount = 0`, **no swap needed**. On a flip:
   `side=2` token-side above P with the base amount actually held in the wallet.
-- Core (SOL-USDC, CALM): double-sided `side=3` ~50/50. This needs an entry swap —
-  **haircut the reported fill ×0.995** before `base_amount` (or read the true wallet balance).
+- Core (SOL-USDC): call `outcome_learner(entry_check)` with regime and exact wallet
+  composition. Obey its side: `side=2` spends existing SOL above P, `side=1` spends existing
+  USDC below P, and `side=3` uses both only when balanced. Do not swap SOL into USDC merely
+  to force a quote-only entry. Haircut any explicitly authorized side-3 swap fill.
 - Size inversely to volatility and to conviction: full satellite allocation only for gated
   pools in a clean regime; anything exploratory gets half.
 - Always `keep_position=false`. **PnL/TP/SL and risk limits are measured in USD** even for

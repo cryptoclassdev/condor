@@ -27,6 +27,11 @@ For `guardian`, `balanced`, and `hunter`:
 - Start with a known Meteora LP and record its address, token composition, and wallet value.
 - Confirm `orphan_guard` reports equal on-chain positions and RUNNING executors.
 - Confirm `wallet_audit` plus `capital_guard` explain wallet + LP equity within rounding.
+- From a flat wallet, confirm the first/core entry leaves the configured minimum deposit,
+  rent, gas floor, and execution buffer available for both remaining target slots.
+- Seed a small non-quote residual, confirm `inventory_cleanup_guard` emits one exact-mint
+  SOL cleanup plan, and confirm the following tick verifies source-token decrease plus SOL
+  increase before the proceeds become deployable. Confirm USDC/USDT remain untouched.
 - Exercise one create and one close at the smallest practical size; verify each in both the
   executor registry and Meteora/on-chain state before accepting the reported result.
 - Confirm a satellite/runner has an exact UTC deadline and that lifecycle expiry produces a

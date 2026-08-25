@@ -23,6 +23,9 @@ class Config(BaseModel):
     micro_runner_max_hold_min: float = 15.0
     micro_runner_stop_loss_pct: float = 3.0
     micro_runner_take_profit_pct: float = 5.0
+    take_profit_pct: float = 12.0
+    trailing_arm_pct: float = 8.0
+    trailing_gap_pct: float = 6.0
     material_fill_change_pct: float = 20.0
     early_exit_buffer_pct: float = 2.0
     out_of_range_max_sec: float = 1800.0
@@ -98,6 +101,14 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
                 "out_of_range_max_sec": config.out_of_range_max_sec,
                 "out_of_range_buffer_pct": config.out_of_range_buffer_pct,
                 "rebalance_cooldown_sec": config.rebalance_cooldown_sec,
+            }
+        )
+    if "take_profit_pct" in inspect.signature(evaluate_lifecycle).parameters:
+        lifecycle_kwargs.update(
+            {
+                "take_profit_pct": config.take_profit_pct,
+                "trailing_arm_pct": config.trailing_arm_pct,
+                "trailing_gap_pct": config.trailing_gap_pct,
             }
         )
     rows, next_state = evaluate_lifecycle(executors, **lifecycle_kwargs)

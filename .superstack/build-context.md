@@ -19,7 +19,7 @@ build_status:
   devnet_deployed: false
   program_id: null
 review:
-  completed_at: 2026-08-22
+  completed_at: 2026-08-25
   overall_grade: B+
   security_score: B+
   quality_score: A-
@@ -52,6 +52,10 @@ review:
     - Hummingbot API credential rotated with owner-only local files
     - deterministic executor outcome capture proven on a live sparse ACP event
     - frontend entry bundle split into stable dependency groups
+    - Meteora official DLMM Data API is primary for core and runner discovery with GeckoTerminal fallback
+    - deterministic hard take-profit and trailing-profit lifecycle exits cover ordinary LP positions
+    - residual cleanup blocks mints still referenced by a RUNNING LP
+    - soak reconciliation parser matches the live guard-summary journal format
   residual_work:
     - upload final demo video
     - revoke and reissue the Telegram bot token in BotFather, then install it with the hidden-input helper

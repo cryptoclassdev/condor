@@ -23,6 +23,8 @@ from pydantic import BaseModel, Field, field_validator
 from telegram.ext import ContextTypes
 from config_manager import get_client
 from handlers.dex.geckoterminal import _extract_pool_data
+from agents.meteora_regime_lp.meteora_data_api import get_json as meteora_get_json
+from agents.meteora_regime_lp.meteora_data_api import pool_to_gecko_shape
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,7 @@ GECKO_NETWORK = "solana"
 CLMM_NETWORK = "solana-mainnet-beta"
 VENUE = "meteora"
 _WINDOW_TO_FIELD = {"1h": "volume_1h", "6h": "volume_6h", "24h": "volume_24h"}
+_WINDOW_TO_NATIVE = {"1h": "1h", "6h": "4h", "24h": "24h"}
 _QUOTE_MINTS = {
     "SOL": "So11111111111111111111111111111111111111112",
     "USDC": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
@@ -53,6 +56,11 @@ class Config(BaseModel):
     )
     exclude_pools: list[str] = Field(default=[], description="Pool addresses to exclude (already held)")
     exclude_mints: list[str] = Field(default=[], description="Base token mints to exclude (already held)")
+    prefer_meteora_api: bool = Field(
+        default=True,
+        description="Use Meteora's official DLMM Data API before GeckoTerminal fallback",
+    )
+    native_page_size: int = Field(default=250, ge=1, le=1000)
 
     @field_validator("exclude_pools", "exclude_mints", mode="before")
     @classmethod
@@ -69,6 +77,30 @@ async def _gecko_get(session: aiohttp.ClientSession, path: str, params: dict | N
         if resp.status != 200:
             raise RuntimeError(f"GeckoTerminal {path} -> HTTP {resp.status}")
         return await resp.json()
+
+
+async def _fetch_native_pools(
+    session: aiohttp.ClientSession, config: Config
+) -> list[dict]:
+    payload = await meteora_get_json(
+        session,
+        "pools",
+        {
+            "page": 1,
+            "page_size": config.native_page_size,
+            "sort_by": (
+                f"fee_tvl_ratio_{_WINDOW_TO_NATIVE.get(config.ranking_window, '24h')}:desc"
+            ),
+            "filter_by": (
+                f"tvl>={config.min_tvl_usd:g} && is_blacklisted=false"
+            ),
+        },
+    )
+    return [
+        pool_to_gecko_shape(pool)
+        for pool in payload.get("data", []) or []
+        if isinstance(pool, dict)
+    ]
 
 
 def _num(v, default=0.0) -> float:
@@ -91,9 +123,21 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
     excl_pools = {p for p in config.exclude_pools if p}
     excl_mints = {m for m in config.exclude_mints if m}
 
-    # 1. Source candidates: global trending + top Meteora pools (2 pages).
+    # 1. Source candidates. Meteora's own indexed API is primary; GeckoTerminal
+    # remains an independent fallback rather than a single point of failure.
     raw: list[dict] = []
-    try:
+    source = "Meteora DLMM Data API"
+    native_succeeded = False
+    if config.prefer_meteora_api:
+        try:
+            async with aiohttp.ClientSession() as session:
+                raw = await _fetch_native_pools(session, config)
+            native_succeeded = True
+        except Exception as exc:
+            logger.warning("meteora_pool_scanner: native source failed: %s", exc)
+
+    if not native_succeeded:
+        source = "GeckoTerminal fallback"
         async with aiohttp.ClientSession() as session:
             tasks = [
                 _gecko_get(session, f"networks/{GECKO_NETWORK}/trending_pools"),
@@ -106,8 +150,11 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
                 logger.warning(f"meteora_pool_scanner: gecko source failed: {r}")
                 continue
             raw.extend(r.get("data", []) or [])
-    except Exception as e:
-        return f"meteora_pool_scanner: failed to reach GeckoTerminal: {e}"
+    if not raw and not native_succeeded:
+        return (
+            "meteora_pool_scanner: SOURCE UNAVAILABLE — both the Meteora DLMM Data "
+            "API and GeckoTerminal fallback returned no usable feed. Pause new entries."
+        )
 
     # 2. Parse, filter (venue, quote-by-mint either orientation, TVL, sustained volume, excludes).
     seen: set[str] = set()
@@ -269,6 +316,7 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         f"Quote: **{quote}**. Min TVL: ${config.min_tvl_usd:,.0f}. Sustained-volume gate: "
         f"{'ON' if config.require_sustained_volume else 'off'} ({rejected_spike} rejected). "
         f"Excluded {len(excl_pools)} pools / {len(excl_mints)} held mints. "
+        f"Discovery source: **{source}**. "
         f"Use **MintPair** for the entry swap and lp_executor trading_pair; MaxWidth% is the "
         f"widest total range this pool's bin_step allows (< 69 bins)."
     )
@@ -279,7 +327,8 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
     summary = (
         f"Ranked {len(ranked)} {quote}-quoted Meteora DLMM pools by fee yield "
         f"(from {len(candidates)} gated candidates; {rejected_spike} spike-rejected). "
-        f"Top: {rows[0]['Pair']} ({rows[0]['FeeYield']} yield). Use MintPair for swap + lp_executor."
+        f"Top: {rows[0]['Pair']} ({rows[0]['FeeYield']} yield). Source: {source}. "
+        "Use MintPair for swap + lp_executor."
     )
 
     try:

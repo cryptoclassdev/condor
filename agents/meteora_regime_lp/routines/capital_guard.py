@@ -40,6 +40,9 @@ class Config(BaseModel):
     daily_loss_limit_pct: float = 6.0
     min_native_reserve: float = 0.06
     next_position_rent_native: float = 0.0574
+    target_open_slots: int = Field(default=3, ge=1)
+    min_position_deposit_usd: float = Field(default=20.0, ge=0)
+    slot_reserve_buffer_usd: float = Field(default=2.0, ge=0)
     quote_tokens: list[str] = Field(default=["SOL", "WSOL", "USDC", "USDT"])
     sleeve_percentages: dict[str, float] = Field(
         default={"core": 60.0, "satellite": 20.0, "runner": 20.0}
@@ -361,6 +364,10 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         next_position_rent_native=config.next_position_rent_native,
         daily_loss_limit_pct=config.daily_loss_limit_pct,
         sleeve_percentages=config.sleeve_percentages,
+        target_open_slots=config.target_open_slots,
+        current_open_slots=position_count,
+        min_position_deposit_usd=config.min_position_deposit_usd,
+        slot_reserve_buffer_usd=config.slot_reserve_buffer_usd,
     )
 
     sleeves = ", ".join(
@@ -383,7 +390,10 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         f"${plan.daily_loss_limit_usd:,.2f} at {config.daily_loss_limit_pct:g}%; "
         f"liquid quote before reserves ${liquid_quote:,.2f}; max next deposit "
         f"${plan.max_new_deposit_usd:,.2f} after ${plan.gas_reserve_usd:,.2f} gas "
-        f"reserve + ${plan.next_position_rent_usd:,.2f} next-position rent. "
+        f"reserve + ${plan.next_position_rent_usd:,.2f} next-position rent + "
+        f"${plan.future_slot_reserve_usd:,.2f} reserved for later target slots "
+        f"({position_count}/{config.target_open_slots} currently open, "
+        f"${config.min_position_deposit_usd:,.2f} minimum deposit each). "
         f"Exact-token per-asset max deposits: {per_asset}; aggregate liquid value "
         "cannot substitute one token for another. "
         f"Sleeve ceilings: {sleeves}."

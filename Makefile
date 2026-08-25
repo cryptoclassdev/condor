@@ -120,9 +120,13 @@ verify-meteora:
 		tests/test_meteora_restart_recovery.py \
 		tests/test_meteora_competition_guard.py \
 		tests/test_meteora_capital_guard.py \
+		tests/test_meteora_inventory_cleanup_guard.py \
+		tests/test_meteora_wallet_audit.py \
 		tests/test_meteora_lifecycle_guard.py \
 		tests/test_meteora_orphan_guard.py \
 		tests/test_meteora_runner_scanner.py \
+		tests/test_meteora_pool_scanner.py \
+		tests/test_meteora_data_api.py \
 		tests/test_meteora_wallet_truth.py \
 		tests/test_meteora_equity_ledger.py \
 		tests/test_meteora_performance.py \

@@ -114,7 +114,9 @@ def audit(
     journal = (session_dir / "journal.md").read_text(encoding="utf-8")
     decisions = _latest_decisions(journal)
     newest = decisions[-1] if decisions else ""
-    recent = "\n".join(decisions)
+    agent_response = snapshot.partition("## Agent Response\n")[2]
+    current_evidence = "\n".join([newest, agent_response])
+    recent = "\n".join([*decisions, agent_response])
     metrics = _snapshot_metrics(snapshot)
     checks: list[Check] = []
 
@@ -143,7 +145,14 @@ def audit(
         )
     )
     clean_reconciliation = bool(
-        re.search(r"Reconcile clean \(0 orphan/0 ghost", newest, re.IGNORECASE)
+        re.search(
+            r"(?:(?:recon|reconcile|reconciliation)\s+clean|"
+            r"orphan_guard:\s*clean|guards?\s+clean)"
+            r"[^.\n]{0,80}"
+            r"0\s+orphans?(?:\s*/\s*(?:0\s*)?|\s*,\s*0\s*)ghosts?",
+            current_evidence,
+            re.IGNORECASE,
+        )
     )
     checks.append(
         Check(
@@ -154,11 +163,30 @@ def audit(
             else "latest decision lacks clean 0-orphan/0-ghost evidence",
         )
     )
+    positive_usd = r"(?:[1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*)"
     stranded_bad = bool(
-        re.search(r"(?:stranded inventory|stranded)[^.;]{0,60}(?:\$[1-9]|[1-9]\d*)", newest, re.I)
+        re.search(
+            rf"(?:\${positive_usd}\s+stranded|"
+            rf"stranded(?: inventory)?[^.;]{{0,30}}\${positive_usd})",
+            current_evidence,
+            re.I,
+        )
     )
-    stranded_clear = bool(re.search(r"no stranded", recent, re.I))
-    inventory_status = "FAIL" if stranded_bad else ("PASS" if stranded_clear else "WARN")
+    cleanup_safely_deferred = bool(
+        re.search(
+            r"cleanup\s+WAIT[^.]{0,120}(?:LP|executor)[^.]{0,80}RUNNING",
+            current_evidence,
+            re.I,
+        )
+    )
+    stranded_clear = bool(
+        re.search(r"(?:no|\$0(?:\.0+)?)\s+stranded", recent, re.I)
+    )
+    inventory_status = (
+        "WARN"
+        if stranded_bad and cleanup_safely_deferred
+        else ("FAIL" if stranded_bad else ("PASS" if stranded_clear else "WARN"))
+    )
     checks.append(
         Check(
             "wallet_inventory",
@@ -166,7 +194,9 @@ def audit(
             "recent direct wallet audit reports no stranded inventory"
             if stranded_clear and not stranded_bad
             else (
-                "latest decision reports stranded inventory"
+                "stranded inventory cleanup is safely deferred while its LP is running"
+                if stranded_bad and cleanup_safely_deferred
+                else "latest decision reports stranded inventory"
                 if stranded_bad
                 else "no explicit inventory result in the last five decisions"
             ),

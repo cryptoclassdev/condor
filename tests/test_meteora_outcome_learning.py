@@ -8,8 +8,194 @@ from agents.meteora_regime_lp.outcome_learning import (
     LearningState,
     OutcomeLearner,
     PositionAttempt,
+    SideContext,
+    load_baseline_policy,
 )
 from agents.meteora_regime_lp.routines import outcome_learner
+
+
+def test_sol_heavy_uptrend_recommends_selling_sol_above_spot():
+    recommendation = OutcomeLearner().recommend_side(
+        SideContext(
+            pool_address="core-pool",
+            sleeve="core",
+            regime="TRENDING_UP",
+            base_asset="SOL",
+            quote_asset="USDC",
+            wallet_base_usd=100,
+            wallet_quote_usd=20,
+        ),
+        LearningState(),
+    )
+
+    assert recommendation.side == 2
+    assert recommendation.placement == "ABOVE"
+    assert recommendation.intent == "SELL_BASE_INTO_STRENGTH"
+
+
+def test_balanced_calm_core_recommends_centered_liquidity():
+    recommendation = OutcomeLearner().recommend_side(
+        SideContext(
+            pool_address="core-pool",
+            sleeve="core",
+            regime="CALM",
+            base_asset="SOL",
+            quote_asset="USDC",
+            wallet_base_usd=55,
+            wallet_quote_usd=45,
+        ),
+        LearningState(),
+    )
+
+    assert recommendation.side == 3
+    assert recommendation.placement == "CENTERED"
+    assert recommendation.intent == "MARKET_MAKE_BOTH_SIDES"
+
+
+def test_base_heavy_downtrend_abstains_instead_of_selling_after_the_drop():
+    recommendation = OutcomeLearner().recommend_side(
+        SideContext(
+            pool_address="core-pool",
+            sleeve="core",
+            regime="TRENDING",
+            trend_direction="DOWN",
+            base_asset="SOL",
+            quote_asset="USDC",
+            wallet_base_usd=100,
+            wallet_quote_usd=20,
+        ),
+        LearningState(),
+    )
+
+    assert recommendation.side == 0
+    assert recommendation.placement == "ABSTAIN"
+
+
+def test_packaged_baseline_policy_is_versioned_and_safe():
+    baseline = load_baseline_policy()
+
+    assert baseline.version == 1
+    assert baseline.inventory_heavy_ratio == 0.60
+    assert baseline.minimum_verified_side_samples >= 3
+    assert baseline.maximum_learned_bias == 0.15
+
+
+def test_verified_side_result_persists_across_restart(tmp_path):
+    learner = OutcomeLearner()
+    result = learner.observe(
+        PositionAttempt(
+            attempt_id="side-close-1",
+            action="close",
+            pool_address="core-pool",
+            sleeve="core",
+            executor_status="COMPLETED",
+            chain_position_found=False,
+            pnl_pct=1.2,
+            vs_hodl_pct=0.8,
+            entry_side=2,
+            entry_regime="TRENDING_UP",
+        ),
+        LearningState(),
+    )
+
+    performance = result.state.side_performance["core|TRENDING_UP|2"]
+    assert performance.verified_samples == 1
+    assert performance.cumulative_vs_hodl_pct == 0.8
+    assert performance.beat_hodl_count == 1
+
+    store = FileLearningStore(tmp_path)
+    store.record(
+        PositionAttempt(
+            attempt_id="side-close-1",
+            action="close",
+            pool_address="core-pool",
+            sleeve="core",
+            executor_status="COMPLETED",
+            chain_position_found=False,
+            pnl_pct=1.2,
+            vs_hodl_pct=0.8,
+            entry_side=2,
+            entry_regime="TRENDING_UP",
+        ),
+        result,
+    )
+    restored = FileLearningStore(tmp_path).load_state()
+    assert restored.side_performance["core|TRENDING_UP|2"] == performance
+
+
+def test_repeated_hodl_underperformance_suspends_that_contextual_side():
+    learner = OutcomeLearner()
+    state = LearningState()
+    for index, vs_hodl in enumerate((-1.1, -0.8, -1.4)):
+        result = learner.observe(
+            PositionAttempt(
+                attempt_id=f"side-loss-{index}",
+                action="close",
+                pool_address=f"core-pool-{index}",
+                sleeve="core",
+                executor_status="COMPLETED",
+                chain_position_found=False,
+                pnl_pct=0.1,
+                vs_hodl_pct=vs_hodl,
+                entry_side=2,
+                entry_regime="TRENDING_UP",
+            ),
+            state,
+        )
+        state = result.state
+
+    recommendation = learner.recommend_side(
+        SideContext(
+            pool_address="next-core-pool",
+            sleeve="core",
+            regime="TRENDING_UP",
+            base_asset="SOL",
+            quote_asset="USDC",
+            wallet_base_usd=100,
+            wallet_quote_usd=20,
+        ),
+        state,
+    )
+
+    assert recommendation.side == 0
+    assert recommendation.placement == "ABSTAIN"
+    assert "underperformed HODL" in recommendation.reason
+
+
+def test_confirmed_create_context_is_reused_by_automatic_close_learning():
+    learner = OutcomeLearner()
+    opened = learner.observe(
+        PositionAttempt(
+            attempt_id="context-open",
+            action="create",
+            pool_address="core-context",
+            sleeve="core",
+            executor_status="RUNNING",
+            chain_position_found=True,
+            wallet_delta_usd=-40,
+            entry_side=2,
+            entry_regime="TRENDING_UP",
+        ),
+        LearningState(),
+    )
+
+    closed = learner.observe(
+        PositionAttempt(
+            attempt_id="context-close",
+            action="close",
+            pool_address="core-context",
+            sleeve="core",
+            executor_status="COMPLETED",
+            chain_position_found=False,
+            pnl_pct=1.0,
+            vs_hodl_pct=0.6,
+        ),
+        opened.state,
+    )
+
+    performance = closed.state.side_performance["core|TRENDING_UP|2"]
+    assert performance.verified_samples == 1
+    assert "core-context" not in closed.state.active_side_contexts
 
 
 def test_failed_create_with_chain_footprint_blocks_duplicate_retry():
@@ -354,6 +540,34 @@ def test_entry_check_schema_does_not_require_record_only_fields(tmp_path, monkey
 
     assert config.action == "create"
     assert config.sleeve == "satellite"
+
+
+def test_entry_check_returns_contextual_side_without_chatgpt_updates(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(outcome_learner, "STORE_ROOT", tmp_path)
+
+    text = asyncio.run(
+        outcome_learner.run(
+            outcome_learner.Config(
+                mode="entry_check",
+                pool_address="core-context-pool",
+                sleeve="core",
+                observed_tick=50,
+                regime="TRENDING_UP",
+                base_asset="SOL",
+                quote_asset="USDC",
+                wallet_base_usd=100,
+                wallet_quote_usd=20,
+            ),
+            context=None,
+        )
+    )
+
+    assert "ENTRY_ALLOWED" in text
+    assert "recommended_side=2" in text
+    assert "placement=ABOVE" in text
+    assert "intent=SELL_BASE_INTO_STRENGTH" in text
 
 
 def test_replayed_terminal_observation_is_idempotent():

@@ -142,7 +142,9 @@ def test_runner_scan_has_a_hard_wall_clock_budget(monkeypatch):
     async def exercise():
         return await asyncio.wait_for(
             runner_scanner.run(
-                runner_scanner.Config(scan_timeout_sec=0.01),
+                runner_scanner.Config(
+                    scan_timeout_sec=0.01, prefer_meteora_api=False
+                ),
                 type("Context", (), {"_chat_id": 1})(),
             ),
             timeout=0.1,
@@ -179,13 +181,21 @@ def test_rate_limit_circuit_cools_down_future_scans(monkeypatch):
 
     first = asyncio.run(
         runner_scanner.run(
-            runner_scanner.Config(scan_timeout_sec=1, rate_limit_cooldown_sec=600),
+            runner_scanner.Config(
+                scan_timeout_sec=1,
+                rate_limit_cooldown_sec=600,
+                prefer_meteora_api=False,
+            ),
             context,
         )
     )
     second = asyncio.run(
         runner_scanner.run(
-            runner_scanner.Config(scan_timeout_sec=1, rate_limit_cooldown_sec=600),
+            runner_scanner.Config(
+                scan_timeout_sec=1,
+                rate_limit_cooldown_sec=600,
+                prefer_meteora_api=False,
+            ),
             context,
         )
     )
