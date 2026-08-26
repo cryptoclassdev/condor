@@ -132,6 +132,20 @@ def test_orphan_guard_clean_wording_is_reconciliation_evidence(tmp_path):
     assert _statuses(result)["reconciliation"] == "PASS"
 
 
+def test_post_outage_orphan_guard_summary_is_reconciliation_evidence(tmp_path):
+    session = _session(
+        tmp_path,
+        decision=(
+            "All guards clean post-outage. orphan_guard 0 orphan/0 ghost. "
+            "Wallet $72.82 liquid, no stranded inventory."
+        ),
+    )
+
+    result = soak.audit(session, now=1010, pid_probe=lambda _pid: True)
+
+    assert _statuses(result)["reconciliation"] == "PASS"
+
+
 def test_guard_summary_wording_is_reconciliation_evidence(tmp_path):
     session = _session(
         tmp_path,

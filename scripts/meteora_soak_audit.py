@@ -146,9 +146,9 @@ def audit(
     )
     clean_reconciliation = bool(
         re.search(
-            r"(?:(?:recon|reconcile|reconciliation)\s+clean|"
+            r"(?:(?:(?:recon|reconcile|reconciliation)\s+clean|"
             r"orphan_guard:\s*clean|guards?\s+clean)"
-            r"[^.\n]{0,80}"
+            r"[^.\n]{0,80}|orphan_guard\s*:?\s*)"
             r"0\s+orphans?(?:\s*/\s*(?:0\s*)?|\s*,\s*0\s*)ghosts?",
             current_evidence,
             re.IGNORECASE,
